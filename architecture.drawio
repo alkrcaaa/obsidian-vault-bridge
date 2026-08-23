@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="how-it-works">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1050" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- TITLE -->
+        <mxCell id="title" value="obsidian-vault-bridge — real usage flow" style="text;html=1;fontSize=22;fontStyle=1;align=left;verticalAlign=middle;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="700" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="What actually happens while you're talking to the agent — three independent flows, each opt-in and fail-open." style="text;html=1;fontSize=13;fontStyle=2;align=left;verticalAlign=middle;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="50" width="900" height="24" as="geometry" />
+        </mxCell>
+
+        <!-- USER -->
+        <mxCell id="user" value="You&#xa;(chatting with Claude / Qwen)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="110" width="180" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="agent" value="Agent&#xa;(Claude / Qwen)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="110" width="180" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="euser" value="talk" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=10;bidirectional=1;" edge="1" parent="1" source="user" target="agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== FLOW 1: SAVE / MIRROR (top row) ===================== -->
+        <mxCell id="flow1lane" value="Flow 1 — you say &quot;remember this&quot; (or the agent decides something is worth saving)" style="swimlane;startSize=30;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#333333;fontSize=13;fontStyle=1;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="230" width="1580" height="210" as="geometry" />
+        </mxCell>
+
+        <mxCell id="memsave" value="1. mcp__mem-lite__mem_save&#xa;tool call" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="flow1lane">
+          <mxGeometry x="40" y="60" width="180" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="memlite" value="2. mem-lite&#xa;(SQLite — source of truth)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;fontStyle=1;" vertex="1" parent="flow1lane">
+          <mxGeometry x="290" y="65" width="180" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mirror" value="3. obsidian-mirror.py&#xa;PostToolUse hook fires&#xa;(fail-open, opt-in)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;fontStyle=1;" vertex="1" parent="flow1lane">
+          <mxGeometry x="540" y="55" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="vaultraw" value="4. vault file gets a new line&#xa;$MEM_OBSIDIAN_VAULT/&#xa;&lt;project&gt;/&lt;YYYY-MM-DD&gt;.md" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="flow1lane">
+          <mxGeometry x="830" y="55" width="240" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="obsidianapp" value="5. shows up next time you&#xa;open Obsidian — no manual step" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;dashed=1;" vertex="1" parent="flow1lane">
+          <mxGeometry x="1140" y="55" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f1e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;flowAnimation=1;" edge="1" parent="flow1lane" source="memsave" target="memlite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f1e2" value="triggers" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=10;flowAnimation=1;" edge="1" parent="flow1lane" source="memsave" target="mirror">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="230" y="30" />
+              <mxPoint x="650" y="30" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f1e3" value="appends" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=10;flowAnimation=1;" edge="1" parent="flow1lane" source="mirror" target="vaultraw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f1e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;" edge="1" parent="flow1lane" source="vaultraw" target="obsidianapp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f1note" value="Raw, append-only. mem-lite stays the source of truth — this is just a mirror." style="text;html=1;fontSize=10;fontStyle=2;align=left;fontColor=#996600;" vertex="1" parent="flow1lane">
+          <mxGeometry x="540" y="165" width="500" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- edge from agent down into flow1 -->
+        <mxCell id="agentToF1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="agent" target="memsave">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== FLOW 2: COMPILE NUDGE (middle row) ===================== -->
+        <mxCell id="flow2lane" value="Flow 2 — every new prompt, quietly checked in the background" style="swimlane;startSize=30;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#333333;fontSize=13;fontStyle=1;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="470" width="1580" height="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="prompt" value="1. you send a new prompt" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="flow2lane">
+          <mxGeometry x="40" y="55" width="180" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="nudge" value="2. compile-nudge.py&#xa;UserPromptSubmit hook&#xa;(opt-in: VAULT_DIR)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;fontStyle=1;" vertex="1" parent="flow2lane">
+          <mxGeometry x="290" y="50" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="compiled" value="3. compares against&#xa;Code/&lt;repo&gt;.md&#xa;(curated note, has last_compiled)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="flow2lane">
+          <mxGeometry x="580" y="50" width="240" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="nudgeresult" value="4. if 8+ new saves or 14+ days stale:&#xa;one nudge/day —&#xa;&quot;this note is behind, want a synthesis?&quot;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="flow2lane">
+          <mxGeometry x="890" y="50" width="280" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f2e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="flow2lane" source="prompt" target="nudge">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f2e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="flow2lane" source="nudge" target="compiled">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f2e3" value="only if stale" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontSize=10;" edge="1" parent="flow2lane" source="compiled" target="nudgeresult">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f2note" value="Never writes anything itself — only nudges. You have to say &quot;go ahead&quot; before the agent compiles." style="text;html=1;fontSize=10;fontStyle=2;align=left;fontColor=#3366aa;" vertex="1" parent="flow2lane">
+          <mxGeometry x="290" y="160" width="600" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="agentToF2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="user" target="prompt">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="130" y="440" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ===================== FLOW 3: VAULT SEARCH (bottom row) ===================== -->
+        <mxCell id="flow3lane" value="Flow 3 — only when the agent decides it actually needs vault context" style="swimlane;startSize=30;fillColor=#e1d5e7;strokeColor=#9673a6;fontColor=#333333;fontSize=13;fontStyle=1;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="40" y="700" width="1580" height="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="question" value="1. you ask something mem-lite&#xa;doesn't have — a past decision,&#xa;a hand-written note" style="rhombus;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="flow3lane">
+          <mxGeometry x="40" y="50" width="200" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="vsearch" value="2. agent deliberately calls&#xa;vault-search MCP server&#xa;(FastMCP, stdio; opt-in: VAULT_DIR)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;fontStyle=1;" vertex="1" parent="flow3lane">
+          <mxGeometry x="320" y="45" width="240" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="vaultwhole" value="3. keyword + backlink search&#xa;over the whole vault&#xa;(raw logs + curated notes)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="flow3lane">
+          <mxGeometry x="640" y="50" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="backtoAgent" value="4. results returned —&#xa;used in this one reply only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="flow3lane">
+          <mxGeometry x="940" y="50" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f3e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="flow3lane" source="question" target="vsearch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f3e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="flow3lane" source="vsearch" target="vaultwhole">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f3e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="flow3lane" source="vaultwhole" target="backtoAgent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f3note" value="Never called automatically on every prompt — that would burn tokens for no benefit. Only on a deliberate decision." style="text;html=1;fontSize=10;fontStyle=2;align=left;fontColor=#663377;" vertex="1" parent="flow3lane">
+          <mxGeometry x="320" y="160" width="700" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="agentToF3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.7;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" edge="1" parent="1" source="agent" target="question">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="15" y="200" />
+              <mxPoint x="15" y="740" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- legend -->
+        <mxCell id="legend" value="Two env vars, two directions: MEM_OBSIDIAN_VAULT is where Flow 1 writes. VAULT_DIR is what Flows 2 &amp; 3 read. All three flows are opt-in and fail-open — unset the env var and the piece is a silent no-op." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;align=left;verticalAlign=middle;spacing=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="580" y="110" width="900" height="80" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
