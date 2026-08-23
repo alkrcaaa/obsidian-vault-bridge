@@ -11,6 +11,12 @@ Searches markdown files in an Obsidian vault, ranking results by:
 3. **Body keyword frequency** (1x per occurrence, capped at 20)
 4. **Wikilink connections** (+2 per `[[link]]` that contains query terms)
 
+The total is then scaled by what kind of note it is: a curated note carrying
+`last_compiled:` in its frontmatter scores ×1.5, and a raw append-only log under
+`MEM_OBSIDIAN_VAULT` (what `obsidian-mirror.py` writes) scores ×0.5. Without that,
+the raw mem-lite record outranks the article it was compiled into — backwards for
+a raw → compile → wiki flow.
+
 ## Tools
 
 ### `vault_search`
@@ -23,8 +29,29 @@ Search the vault for query terms.
 - `limit` (int, default 20): Max results
 - `subdir` (str, optional): Search only within a subdirectory (e.g. `"08- Wiki"`)
 - `case_sensitive` (bool, default False): Case-sensitive matching
+- `frontmatter` (dict, optional): Only search notes whose frontmatter carries these
+  key/value pairs, e.g. `{"mem_lite_project": "workspace--myrepo"}` to land on a
+  repo's compiled note directly — the same key `compile-nudge.py` matches on.
 
 **Returns:** `{query, vault, total_matches, returned, results: [{path, score, title, snippet, links}]}`
+
+`snippet` is drawn from the note body around the first matching term (the whole
+query first, then each term), never from the frontmatter.
+
+### `vault_read`
+
+Read a note back — `vault_search` returns vault-relative paths, and this takes one
+straight back, so nothing has to rebuild an absolute path for a file-reading tool.
+
+**Parameters:**
+- `path` (str, required): Vault-relative path from `vault_search` / `vault_list`
+- `vault_dir` (str, optional): Vault root path
+- `section` (str, optional): Return only one heading's section (e.g. `"Known Risks"`
+  or `"## Known Risks"`), down to the next heading at the same or higher level.
+  Compiled notes run to hundreds of lines; pull the one section you need.
+
+**Returns:** `{path, section, content}`, or `{error, headings}` if the section is
+missing, so a near-miss on the heading name is one retry rather than a dead end.
 
 ### `vault_list`
 

@@ -20,7 +20,9 @@ piece is a silent no-op.
   once per project per day. Never writes anything itself — the agent does the
   synthesis, only with the user's go-ahead. Opt-in via `VAULT_DIR`.
 - `mcp-infra/vault-search/` — FastMCP server, keyword + backlink search over an
-  Obsidian vault (2 tools: `vault_search`, `vault_list`). Opt-in via `VAULT_DIR`.
+  Obsidian vault (`vault_search`, `vault_read`, `vault_list`). Ranks curated notes
+  above the raw mirror logs below, and `vault_read` takes a search hit's path back
+  directly — optionally just one section of it. Opt-in via `VAULT_DIR`.
   Deliberately **not** auto-injected into every prompt — call it only when a
   question needs vault context, to avoid ambient per-prompt token cost.
 
