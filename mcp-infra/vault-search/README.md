@@ -62,8 +62,15 @@ List files in the vault, optionally filtered.
 - `subdir` (str, optional): Subdirectory to list
 - `pattern` (str, optional): Glob pattern (e.g. `"*.md"`, `"Karagag*"`)
 - `include_links` (bool, default False): Include `[[wikilink]]` targets
+- `limit` (int, default 50): Max entries returned
 
-**Returns:** `{vault, subdir, pattern, count, files: [{path, title, size, links?}]}`
+**Returns:** `{vault, subdir, pattern, total, count, truncated, files: [{path, title, size, links?}]}`
+
+Prefer `vault_search` for finding something — it ranks and explains each hit. Reach for
+`vault_list` to see what a folder holds, and narrow with `subdir`/`pattern` rather than
+raising `limit`. Measured on a 165-note vault: an unfiltered listing cost ~4.9k tokens and
+was being called almost as often as search, so most of that was paths nobody read. The
+default cap brings it to ~1.7k, and `subdir` to ~0.6k.
 
 ## Install
 

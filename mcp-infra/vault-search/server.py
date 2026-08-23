@@ -52,6 +52,11 @@ SNIPPET_MAX = 200
 # Default result limit
 DEFAULT_LIMIT = 20
 
+# Default vault_list cap. An unfiltered listing of a 165-note vault ran ~4.9k
+# tokens and was being called almost as often as search (139 vs 148 calls),
+# spending roughly 677k tokens on directory listings nobody read.
+DEFAULT_LIST_LIMIT = 50
+
 
 server = FastMCP("vault-search", "1.0.0")
 
@@ -417,17 +422,24 @@ def vault_list(
     subdir: str | None = None,
     pattern: str | None = None,
     include_links: bool = False,
+    limit: int = DEFAULT_LIST_LIMIT,
 ) -> dict[str, Any]:
     """List files in an Obsidian vault, optionally filtered by subdirectory or glob pattern.
+
+    For finding something, prefer vault_search -- it ranks, and it returns a
+    snippet of why each hit matched. Use this to see what a folder holds, and
+    narrow with `subdir` or `pattern` rather than raising `limit`: a whole
+    vault listing is mostly paths you did not need.
 
     Args:
         vault_dir: Absolute path to the Obsidian vault root. Falls back to VAULT_DIR env var.
         subdir: Optional subdirectory to list (e.g. "07- Raw", "08- Wiki").
         pattern: Optional glob pattern to filter files (e.g. "*.md", "Karagag*").
         include_links: If True, include [[wikilink]] targets for each file (slower).
+        limit: Maximum entries to return (default 50). 'total' reports how many matched.
 
     Returns:
-        dict with 'vault', 'files' (list of {path, title, size, links?})
+        dict with 'vault', 'total', 'count', 'files' (list of {path, title, size, links?})
     """
     try:
         vault = _resolve_vault(vault_dir)
@@ -449,6 +461,9 @@ def vault_list(
             if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(f.name, pattern):
                 filtered.append(f)
         files = filtered
+
+    total = len(files)
+    files = sorted(files)[:limit]
 
     results = []
     for f in files:
@@ -484,7 +499,9 @@ def vault_list(
         "vault": str(vault),
         "subdir": subdir,
         "pattern": pattern,
+        "total": total,
         "count": len(results),
+        "truncated": total > len(results),
         "files": results,
     }
 
