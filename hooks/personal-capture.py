@@ -64,6 +64,12 @@ MAX_FACTS = 3
 MACHINE_MARKERS = (
     "<local-command", "<command-name>", "<system-reminder>", "Caveat:",
     "[Request interrupted", "[Usage limit", "<session-handoff",
+    # Qwen files its own injected hook context as another part of the user's
+    # message, so this has to be dropped part by part -- checking the joined
+    # message would let it ride along behind whatever the user actually typed.
+    # Named exactly: a bare "<qwen:" also matches a user asking about one of
+    # these blocks, and silently deletes the very message they typed.
+    "<qwen:user-prompt-submit-context", "<qwen:session-start-context",
 )
 
 SECRET_MARKERS = re.compile(
@@ -104,6 +110,36 @@ MESAJLAR:
 JSON:"""
 
 
+def _record_text(rec):
+    """The user's words in one transcript record, across both hosts' shapes.
+
+    Claude writes `message.content` (a string, or blocks with `type: text`);
+    Qwen writes `message.parts` (objects carrying `text`, no type tag) and
+    appends its own hook context as a further part of the same message. The
+    two hosts share this hook, so reading only Claude's shape means Qwen
+    dispatches the worker every session and it always finds nothing -- which
+    is what the first live Qwen run actually did.
+    """
+    message = rec.get("message") or {}
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    blocks = content if isinstance(content, list) else message.get("parts")
+    if not isinstance(blocks, list):
+        return None
+    kept = []
+    for b in blocks:
+        if not isinstance(b, dict) or not isinstance(b.get("text"), str):
+            continue
+        if "type" in b and b["type"] != "text":
+            continue
+        text = b["text"]
+        if any(m in text[:400] for m in MACHINE_MARKERS):
+            continue
+        kept.append(text)
+    return "\n".join(kept)
+
+
 def _user_messages(path):
     """What the user typed, oldest first, machine records removed."""
     out = []
@@ -116,12 +152,7 @@ def _user_messages(path):
                     continue
                 if rec.get("type") != "user":
                     continue
-                content = (rec.get("message") or {}).get("content")
-                if isinstance(content, list):
-                    content = "\n".join(
-                        b.get("text", "") for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
+                content = _record_text(rec)
                 if not isinstance(content, str):
                     continue
                 text = content.strip()
@@ -227,27 +258,40 @@ def _append(note_path, facts):
 
 
 def _worker(transcript, note_path, base_url):
+    """Run the capture, and say why on every path that writes nothing.
+
+    This runs detached, so its only channel is the metric line. Without a
+    reason on the empty paths, "the model found nothing new" and "the hook
+    never ran" leave the same trace -- and that ambiguity is what let the
+    rest of this bridge look alive while doing nothing for weeks.
+    """
+    where = os.path.dirname(note_path)
+
+    def quiet(reason):
+        record_metric("personal-capture", "skip", where, reason)
+
     messages = _user_messages(transcript)
     if not messages:
-        return
+        return quiet("no-user-text")
     joined = "\n\n".join(f"- {m}" for m in messages)
     if len(joined) < MIN_CHARS:
-        return
+        return quiet("too-short")
     if len(joined) > MAX_PROMPT_CHARS:
         joined = joined[-MAX_PROMPT_CHARS:]
     try:
         facts = _ask_model(base_url, joined)
     except Exception:
-        return
+        return quiet("model-error")
     if not facts:
-        return
+        return quiet("no-facts")
     try:
         written = _append(note_path, facts)
     except OSError:
-        return
+        return quiet("write-error")
     if written:
-        record_metric("personal-capture", "capture", os.path.dirname(note_path),
-                      f"{written}fact")
+        record_metric("personal-capture", "capture", where, f"{written}fact")
+    else:
+        quiet("all-known")  # every fact the model returned, the note already made
 
 
 def main():
@@ -267,6 +311,9 @@ def main():
 
     transcript = data.get("transcript_path") or ""
     if not transcript or not os.path.isfile(transcript):
+        # Configured but handed nothing to read: a host that does not pass a
+        # transcript on Stop switches this hook off without ever saying so.
+        record_metric("personal-capture", "skip", os.getcwd(), "no-transcript")
         sys.exit(0)
 
     # Stop can fire more than once for a session; capture it once.
@@ -282,6 +329,7 @@ def main():
 
     note_path, _ = find_note(vault_dir, "agent_profile: true")
     if not note_path:
+        record_metric("personal-capture", "skip", vault_dir, "no-profile-note")
         sys.exit(0)
 
     try:
@@ -292,7 +340,11 @@ def main():
             start_new_session=True,
         )
     except Exception:
-        pass
+        record_metric("personal-capture", "skip", vault_dir, "spawn-failed")
+        sys.exit(0)
+    # The worker is detached and reports for itself; this pairs with whatever
+    # it records, so a dispatch with no follow-up means the worker died.
+    record_metric("personal-capture", "dispatch", os.path.dirname(note_path))
     sys.exit(0)
 
 

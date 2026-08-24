@@ -174,6 +174,19 @@ if [[ "$(pc "print(len(m._user_messages('$TRANSCRIPT')))")" == "1" ]]; then
   pass "repeated prompts are sent once"
 else fail "repeated prompts are sent once" "$(pc "print(m._user_messages('$TRANSCRIPT'))")"; fi
 
+# Qwen writes message.parts, not message.content, and files its own injected
+# hook context as a further part of the same record. Reading only Claude's
+# shape made a live Qwen session dispatch the worker and find nothing at all.
+QTRANSCRIPT="$VAULT/qwen-transcript.jsonl"
+cat >"$QTRANSCRIPT" <<'EOF'
+{"type":"user","provenance":"real_user","message":{"role":"user","parts":[{"text":"ben hiç makale okumam"},{"text":"<qwen:user-prompt-submit-context>\ninjected hook noise\n</qwen:user-prompt-submit-context>"}]}}
+{"type":"assistant","message":{"role":"assistant","parts":[{"text":"my own words"}]}}
+EOF
+out="$(pc "print(m._user_messages('$QTRANSCRIPT'))")"
+check "reads Qwen's parts shape too" "makale okumam" "$out"
+check_absent "drops Qwen's injected hook context" "injected hook noise" "$out"
+check_absent "never sends the assistant's own words (Qwen shape)" "my own words" "$out"
+
 out="$(pc "print(m._is_new('Makale okumuyor, repo okuyor.', ['- Makale okumuyor, bilgiyi repolardan alıyor.']))")"
 check "a fact the note already makes is not re-added" "False" "$out"
 out="$(pc "print(m._is_new('Ankara da yasiyor.', ['- Makale okumuyor.']))")"
