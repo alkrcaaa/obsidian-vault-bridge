@@ -8,8 +8,9 @@ plain markdown entry under a dated file, so anyone who keeps notes in an
 Obsidian-style vault (or any plain folder of `.md` files) gets an ambient,
 append-only raw log per project without a second manual step.
 
-Off by default: unset MEM_OBSIDIAN_VAULT and this hook is a silent no-op. Set
-it to a directory and every mem_save lands at:
+Off by default: with MEM_OBSIDIAN_VAULT set neither in the environment nor in
+the installer's config file, this hook is a silent no-op. Point it at a
+directory and every mem_save lands at:
 
     $MEM_OBSIDIAN_VAULT/<project>/<YYYY-MM-DD>.md
 
@@ -28,6 +29,13 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from vault_common import env_or_conf, record_metric
+except Exception:
+    sys.exit(0)
 
 SAVE_RE = re.compile(r'Saved as observation #(\d+) \[(\w+)\] in project "([^"]+)"')
 
@@ -48,23 +56,38 @@ def _response_text(tool_response):
 
 
 def main():
-    vault = os.environ.get("MEM_OBSIDIAN_VAULT")
-    if not vault:
-        sys.exit(0)
-
     try:
         data = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
 
-    if data.get("tool_name") != "mcp__mem-lite__mem_save":
+    # Match on the tool, not on one host's spelling of it. Qwen wires this
+    # PostToolUse on `mcp__mem-lite__.*` and an exact-name compare is the shape
+    # of bug that made personal-capture dispatch every session and find
+    # nothing. Every other mem-lite tool still falls through here untouched,
+    # which is why nothing is recorded before this line -- a metric here would
+    # fire on every search and recall.
+    if not str(data.get("tool_name") or "").endswith("mem_save"):
+        sys.exit(0)
+
+    # Env first, then the installer's config file. Reading only the env meant
+    # this hook was enabled by a hand-written `export` in a shell rc: it fired
+    # for sessions started from that shell and silently mirrored nothing
+    # everywhere else, which is the same failure VAULT_DIR already had.
+    vault = env_or_conf("MEM_OBSIDIAN_VAULT")
+    if not vault:
+        record_metric("obsidian-mirror", "skip", os.getcwd(), "no-mirror-dir")
         sys.exit(0)
 
     try:
         text = _response_text(data.get("tool_response"))
         m = SAVE_RE.search(text)
         if not m:
-            sys.exit(0)  # dedup skip, error, or unrecognised response shape
+            # A dedup skip, an error, or a response shape this regex does not
+            # know. The third is a silent break, so say so rather than exiting
+            # the way a successful skip does.
+            record_metric("obsidian-mirror", "skip", os.getcwd(), "unparsed")
+            sys.exit(0)
         obs_id, obs_type, project = m.group(1), m.group(2), m.group(3)
 
         tool_input = data.get("tool_input") or {}
@@ -93,8 +116,10 @@ def main():
                 f.write(f"# {project} — {now.strftime('%Y-%m-%d')}\n\n")
             f.write("\n".join(lines) + "\n")
     except Exception:
-        pass
+        record_metric("obsidian-mirror", "skip", os.getcwd(), "write-error")
+        sys.exit(0)
 
+    record_metric("obsidian-mirror", "mirror", os.getcwd(), obs_type)
     sys.exit(0)
 
 
