@@ -38,53 +38,24 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from vault_common import find_note, infer_project, record_metric
+except Exception:
+    sys.exit(0)
+
 MIN_NEW_OBS = 8
 MAX_DAYS = 14
+# A repo with no note at all: wait for enough history that a note would have
+# something to say, so a throwaway clone never triggers this.
+BOOTSTRAP_MIN_OBS = 10
 
 MEM_DB = os.path.join(os.path.expanduser("~"), ".claude-mem-lite", "claude-mem-lite.db")
-
-
-def _infer_project(cwd):
-    """Mirror ~/.claude-mem-lite/utils.mjs::inferProject() -- git root first."""
-    root = cwd
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd, capture_output=True, text=True, timeout=3,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            root = result.stdout.strip()
-    except Exception:
-        pass
-    root = root.rstrip("/")
-    base = os.path.basename(root)
-    parent = os.path.basename(os.path.dirname(root))
-    raw = f"{parent}--{base}" if parent and parent not in (".", "/") else base
-    return re.sub(r"[^a-zA-Z0-9_.-]", "-", raw)[:100]
-
-
-def _find_note(vault_dir, project):
-    """First .md file whose frontmatter names this project, or None."""
-    marker = f"mem_lite_project: {project}"
-    for dirpath, dirnames, filenames in os.walk(vault_dir):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-        for name in filenames:
-            if not name.endswith(".md"):
-                continue
-            path = os.path.join(dirpath, name)
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                    head = f.read(1000)
-            except OSError:
-                continue
-            if marker in head:
-                return path, head
-    return None, None
 
 
 def _last_compiled(head):
@@ -97,21 +68,49 @@ def _last_compiled(head):
         return None
 
 
-def _new_obs_count(project, since):
+def _obs_count(project, since=None):
+    """Observations mem-lite holds for this project, all of them or since a date."""
     con = None
     try:
         con = sqlite3.connect(f"file:{MEM_DB}?mode=ro", uri=True, timeout=2)
         cur = con.cursor()
-        cur.execute(
-            "SELECT COUNT(*) FROM observations WHERE project = ? AND created_at > ?",
-            (project, since.strftime("%Y-%m-%dT%H:%M:%S")),
-        )
+        if since is None:
+            cur.execute("SELECT COUNT(*) FROM observations WHERE project = ?", (project,))
+        else:
+            cur.execute(
+                "SELECT COUNT(*) FROM observations WHERE project = ? AND created_at > ?",
+                (project, since.strftime("%Y-%m-%dT%H:%M:%S")),
+            )
         return cur.fetchone()[0]
     except Exception:
         return 0
     finally:
         if con is not None:
             con.close()
+
+
+def _notify_once(project, kind):
+    """True the first time today, False afterwards -- once per project per day."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    marker = os.path.join(tempfile.gettempdir(), f"{kind}-{project}-{today}.notified")
+    if os.path.exists(marker):
+        return False
+    try:
+        open(marker, "w").close()
+    except OSError:
+        pass
+    return True
+
+
+def _emit(user_msg, model_ctx):
+    print(json.dumps({
+        "systemMessage": user_msg,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": model_ctx,
+        },
+    }))
+    sys.exit(0)
 
 
 def main():
@@ -125,31 +124,41 @@ def main():
         sys.exit(0)
 
     cwd = data.get("cwd") or os.getcwd()
-    project = _infer_project(cwd)
+    project = infer_project(cwd)
 
-    note_path, head = _find_note(vault_dir, project)
+    note_path, head = find_note(vault_dir, f"mem_lite_project: {project}")
     if not note_path:
-        sys.exit(0)  # no compiled note for this project -- not this hook's call to make one
+        # No note yet. Where a new one belongs is a user decision, so this hook
+        # still writes nothing -- but staying silent meant a repo with no note
+        # never got one either: no note, no nudge, no note. Once the project has
+        # accumulated real history, say so and let the user place it.
+        total = _obs_count(project)
+        if total < BOOTSTRAP_MIN_OBS or not _notify_once(project, "vault-bootstrap"):
+            sys.exit(0)
+        record_metric("compile-nudge", "bootstrap", cwd, f"{total}obs")
+        _emit(
+            f"📓 {project} has {total} mem-lite entries but no vault note yet — "
+            "nothing is being compiled for this repo.",
+            f"[compile-nudge] mem-lite holds {total} observations for this project and "
+            "no vault note carries `mem_lite_project: " + project + "`, so none of it is "
+            "being compiled and nothing gets injected at session start. Ask the user "
+            "which folder the note belongs in (the vault's own CLAUDE.md owns that "
+            "mapping — do not guess), then create it with `mem_lite_project` and "
+            "`last_compiled` frontmatter.",
+        )
 
     last_compiled = _last_compiled(head)
     if last_compiled is None:
         sys.exit(0)  # malformed/missing date -- don't guess, don't nag
 
     days_stale = (datetime.now(timezone.utc) - last_compiled).days
-    new_obs = _new_obs_count(project, last_compiled)
+    new_obs = _obs_count(project, last_compiled)
 
     if new_obs < MIN_NEW_OBS and days_stale < MAX_DAYS:
         sys.exit(0)
 
-    # Once per project per day -- not once per prompt.
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    marker = os.path.join(tempfile.gettempdir(), f"compile-nudge-{project}-{today}.notified")
-    if os.path.exists(marker):
+    if not _notify_once(project, "compile-nudge"):
         sys.exit(0)
-    try:
-        open(marker, "w").close()
-    except OSError:
-        pass
 
     rel_note = os.path.relpath(note_path, vault_dir)
     user_msg = (
@@ -163,20 +172,8 @@ def main():
         "that note and update its last_compiled date -- don't do this silently."
     )
 
-    try:
-        import hook_metrics
-        hook_metrics.record("compile-nudge", "nudge", cwd, f"{new_obs}obs/{days_stale}d")
-    except Exception:
-        pass
-
-    print(json.dumps({
-        "systemMessage": user_msg,
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": model_ctx,
-        },
-    }))
-    sys.exit(0)
+    record_metric("compile-nudge", "nudge", cwd, f"{new_obs}obs/{days_stale}d")
+    _emit(user_msg, model_ctx)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,21 @@ piece is a silent no-op.
   for the current project (frontmatter `mem_lite_project: <key>`) and it's fallen
   behind mem-lite (8+ new observations or 14+ days since `last_compiled`), nudges
   once per project per day. Never writes anything itself — the agent does the
-  synthesis, only with the user's go-ahead. Opt-in via `VAULT_DIR`.
+  synthesis, only with the user's go-ahead. Opt-in via `VAULT_DIR`. Also speaks up
+  when a project has 10+ observations and no note at all — otherwise a repo with no
+  note produced no nudge and so never got one.
+- `hooks/vault-inject.py` — SessionStart hook, the read half of the loop. Injects the
+  current repo's compiled note (matched on the same `mem_lite_project` key) and, if a
+  note opts in with `agent_profile: true`, a profile card describing the user. What
+  gets injected is the slice between `<!-- agent-card:start -->` and
+  `<!-- agent-card:end -->`, capped (~1400/~1100 chars); a repo note with no markers
+  falls back to its first `##` section, a profile note without them injects nothing.
+  The bound is the point: this rides in every request of the session, so it holds the
+  minimum needed to start work and leaves the rest to `vault_read`. Opt-in via
+  `VAULT_DIR`.
+- `hooks/vault_common.py` — the project-key and note lookup both hooks share. A key
+  resolved differently in one hook than the other fails silently (the note is simply
+  never found), so it exists once.
 - `mcp-infra/vault-search/` — FastMCP server, keyword + backlink search over an
   Obsidian vault (`vault_search`, `vault_read`, `vault_list`). Ranks curated notes
   above the raw mirror logs below, and `vault_read` takes a search hit's path back
