@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from vault_common import (
         agent_card, find_note, first_section, frontmatter_field,
-        infer_project, read_text, record_metric,
+        infer_project, read_text, record_metric, vault_dir as resolve_vault,
     )
 except Exception:
     sys.exit(0)
@@ -97,8 +97,12 @@ def _profile_slice(vault_dir):
 
 
 def main():
-    vault_dir = os.environ.get("VAULT_DIR")
-    if not vault_dir or not os.path.isdir(vault_dir):
+    vault_dir = resolve_vault()
+    if not vault_dir:
+        # Deployed but unconfigured. Silence here is what let the bridge's
+        # hooks look alive while doing nothing for weeks, so leave one line
+        # per session behind: hook-stats can then tell "off" from "broken".
+        record_metric("vault-inject", "skip", os.getcwd(), "no-vault-dir")
         sys.exit(0)
 
     try:

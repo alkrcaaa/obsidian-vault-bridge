@@ -63,13 +63,23 @@ extra deploy step is needed — only the hook `command` paths in
 
 ## Env vars
 
+Env alone does not reach a hook reliably. Hooks are spawned by the agent
+process, which inherits whatever shell launched it: exporting a variable in a
+shell rc reaches sessions started from that shell afterwards and nothing else,
+and a variable set only inside an MCP server's `env` block is private to that
+server. Both failures look identical to "switched off" — `compile-nudge` shipped
+that way and did nothing for weeks. So `VAULT_DIR` and `QWEN_BASE_URL` are also
+read from `~/.config/dev-agent-kit/vault.env` (`KEY=value` per line), written by
+`install.sh` from the installing shell's env. Env wins when both are present.
+
 - `MEM_OBSIDIAN_VAULT` — write target for `obsidian-mirror.py`. Typically a
-  subfolder of your vault, e.g. `<vault>/_mem-log`.
+  subfolder of your vault, e.g. `<vault>/_mem-log`. Env only; mem-lite runs it,
+  not the bridge.
 - `VAULT_DIR` — read target for `vault-search` and every hook except the mirror.
   The vault root. Separate from `MEM_OBSIDIAN_VAULT` on purpose: one is where the
-  mirror writes, the other is what gets searched/read back. It must be exported
-  where non-interactive processes see it (`~/.zshenv`, not `~/.zshrc`) — set only
-  in an MCP server's own env block, the hooks never see it and quietly do nothing.
+  mirror writes, the other is what gets searched/read back. When it resolves to
+  nothing, `vault-inject` records a `skip`/`no-vault-dir` metric once per session
+  so `hook-stats.sh` can tell "off" apart from "broken".
 - `QWEN_BASE_URL` — OpenAI-compatible endpoint for `personal-capture.py`, e.g. a
   local vLLM at `http://host:8002/v1`. Unset means that hook is off.
   `PERSONAL_CAPTURE_MODEL` overrides the model id.

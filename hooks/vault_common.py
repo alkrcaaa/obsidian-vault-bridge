@@ -24,6 +24,41 @@ import subprocess
 CARD_START = "<!-- agent-card:start -->"
 CARD_END = "<!-- agent-card:end -->"
 
+# Where the installer records the vault path. Env alone is not a reliable
+# channel for a hook: hooks are spawned by the agent process, which inherits
+# whatever shell launched it. `VAULT_DIR` exported in ~/.zshenv reaches a
+# session started from a fresh zsh and nothing else -- an agent launched from
+# an older shell, a desktop entry or a non-zsh shell sees it unset, and every
+# hook here then exits in silence. That is exactly how compile-nudge stayed
+# dead from the day it shipped. Resolving through a file the installer writes
+# makes the answer independent of how the agent happened to be started, and
+# works the same on both hosts.
+VAULT_CONF = os.path.expanduser("~/.config/dev-agent-kit/vault.env")
+
+
+def env_or_conf(key):
+    """Env first (so a caller can override), then the installer's file."""
+    return os.environ.get(key) or _conf_value(key)
+
+
+def vault_dir():
+    """The configured vault root, or None if unset or not a directory."""
+    value = env_or_conf("VAULT_DIR")
+    return value if value and os.path.isdir(value) else None
+
+
+def _conf_value(key):
+    """One `KEY=value` out of the installer's config file, quotes stripped."""
+    try:
+        with open(VAULT_CONF, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f"{key}="):
+                    return line[len(key) + 1:].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
 
 def infer_project(cwd):
     """Mirror ~/.claude-mem-lite/utils.mjs::inferProject() -- git root first.

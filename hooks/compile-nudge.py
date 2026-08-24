@@ -45,7 +45,9 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from vault_common import find_note, infer_project, record_metric
+    from vault_common import (
+        find_note, infer_project, record_metric, vault_dir as resolve_vault,
+    )
 except Exception:
     sys.exit(0)
 
@@ -114,7 +116,7 @@ def _emit(user_msg, model_ctx):
 
 
 def main():
-    vault_dir = os.environ.get("VAULT_DIR")
+    vault_dir = resolve_vault()
     if not vault_dir or not os.path.isdir(vault_dir) or not os.path.isfile(MEM_DB):
         sys.exit(0)
 

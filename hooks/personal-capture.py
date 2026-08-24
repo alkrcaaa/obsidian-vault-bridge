@@ -46,7 +46,10 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from vault_common import CARD_END, find_note, read_text, record_metric
+    from vault_common import (
+        CARD_END, env_or_conf, find_note, read_text, record_metric,
+        vault_dir as resolve_vault,
+    )
 except Exception:
     sys.exit(0)
 
@@ -252,8 +255,8 @@ def main():
         _worker(sys.argv[2], sys.argv[3], sys.argv[4])
         return
 
-    vault_dir = os.environ.get("VAULT_DIR")
-    base_url = os.environ.get("QWEN_BASE_URL")
+    vault_dir = resolve_vault()
+    base_url = env_or_conf("QWEN_BASE_URL")
     if not vault_dir or not base_url or not os.path.isdir(vault_dir):
         sys.exit(0)
 

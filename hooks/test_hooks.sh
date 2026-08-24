@@ -73,9 +73,20 @@ check "names the note so the agent can read the rest" "Code/repo.md" "$out"
 out="$(echo '{"cwd":"/nonexistent"}' | VAULT_DIR="$VAULT" python3 "$HOOKS_DIR/vault-inject.py" 2>&1 | decode)"
 check_absent "a repo with no note injects nothing" "CARD-BODY-MARKER" "$out"
 
-out="$(echo "{\"cwd\":\"$REPO\"}" | VAULT_DIR="" python3 "$HOOKS_DIR/vault-inject.py" 2>&1)"
-if [[ -z "$out" ]]; then pass "no VAULT_DIR is a silent no-op"
-else fail "no VAULT_DIR is a silent no-op" "expected no output, got: ${out:0:120}"; fi
+# Unconfigured means no env AND no installer config file -- HOME is redirected
+# so the real machine's ~/.config/dev-agent-kit/vault.env cannot answer for it.
+out="$(echo "{\"cwd\":\"$REPO\"}" | VAULT_DIR="" HOME="$(mktemp -d)" python3 "$HOOKS_DIR/vault-inject.py" 2>&1)"
+if [[ -z "$out" ]]; then pass "an unconfigured vault is a silent no-op"
+else fail "an unconfigured vault is a silent no-op" "expected no output, got: ${out:0:120}"; fi
+
+# The config file is the fallback that keeps the hook alive when the agent was
+# launched from a shell that never exported VAULT_DIR -- the failure that kept
+# these hooks dead in production while every manual run looked fine.
+CONFHOME="$(mktemp -d)"
+mkdir -p "$CONFHOME/.config/dev-agent-kit"
+echo "VAULT_DIR=$VAULT" >"$CONFHOME/.config/dev-agent-kit/vault.env"
+out="$(echo "{\"cwd\":\"$REPO\"}" | VAULT_DIR="" HOME="$CONFHOME" python3 "$HOOKS_DIR/vault-inject.py" 2>&1 | decode)"
+check "the config file stands in for a missing VAULT_DIR" "CARD-BODY-MARKER" "$out"
 
 # Profile: opting in is a positive act. A note that carries the flag but marks
 # no card must inject nothing -- falling back to "first section" would leak
@@ -180,7 +191,10 @@ if [[ "$card_lines_before" == "$card_lines_after" ]]; then
   pass "the injected card is left untouched"
 else fail "the injected card is left untouched" "$card_lines_before -> $card_lines_after"; fi
 
-out="$(echo '{"transcript_path":"'"$TRANSCRIPT"'","session_id":"t1"}' | VAULT_DIR="$VAULT" QWEN_BASE_URL="" python3 "$HOOKS_DIR/personal-capture.py" 2>&1)"
+# HOME is redirected as well: without it the config-file fallback would supply
+# the machine's real endpoint and this test would quietly ship a transcript to
+# it instead of asserting the gate.
+out="$(echo '{"transcript_path":"'"$TRANSCRIPT"'","session_id":"t1"}' | VAULT_DIR="$VAULT" QWEN_BASE_URL="" HOME="$(mktemp -d)" python3 "$HOOKS_DIR/personal-capture.py" 2>&1)"
 if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
 else fail "no model endpoint is a silent no-op" "$out"; fi
 
