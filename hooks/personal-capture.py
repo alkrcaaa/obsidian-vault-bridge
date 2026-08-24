@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from vault_common import (
-        CARD_END, env_or_conf, find_note, read_text, record_metric,
+        env_or_conf, find_note, read_text, record_metric,
         vault_dir as resolve_vault,
     )
 except Exception:
@@ -231,11 +231,16 @@ def _is_new(fact, existing_lines):
 
 def _append(note_path, facts):
     text = read_text(note_path, limit=400000)
-    # Everything after the injected card: the card is curated by hand and this
-    # hook must not grow what rides in every future session.
-    idx = text.find(CARD_END)
-    body = text[idx:] if idx != -1 else text
-    fresh = [f for f in facts if _is_new(f, body.splitlines())]
+    # "Where may I write" and "what does the note already say" are two
+    # different questions, and one slice used to answer both. Writes append at
+    # the end of the note, always below the injected card -- the card is
+    # curated by hand and this hook must not grow what rides in every future
+    # session. The dedup window used to start after the card as well, so it
+    # could not see the card or the note's own prose above it. The design
+    # invites a human to promote a captured line up into the card, and a window
+    # starting below it made exactly the facts the user endorsed come back
+    # every single session.
+    fresh = [f for f in facts if _is_new(f, text.splitlines())]
     if not fresh:
         return 0
 
@@ -255,6 +260,35 @@ def _append(note_path, facts):
         with open(note_path, "a", encoding="utf-8") as f:
             f.write(header + "\n".join(lines) + "\n")
     return len(fresh)
+
+
+def _progress_path(session_id):
+    """Where this session records how much of the user's typing it has read."""
+    session = re.sub(r"[^A-Za-z0-9_.-]", "-", str(session_id or "")[:60])
+    if not session:
+        return None
+    return os.path.join(tempfile.gettempdir(), f"personal-capture-{session}.chars")
+
+
+def _progress(path):
+    """Characters the user had typed at this session's last dispatch."""
+    if not path:
+        return 0
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def _record_progress(path, typed):
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(typed))
+    except OSError:
+        pass
 
 
 def _worker(transcript, note_path, base_url):
@@ -316,16 +350,22 @@ def main():
         record_metric("personal-capture", "skip", os.getcwd(), "no-transcript")
         sys.exit(0)
 
-    # Stop can fire more than once for a session; capture it once.
-    session = re.sub(r"[^A-Za-z0-9_.-]", "-", str(data.get("session_id") or "")[:60])
-    if session:
-        marker = os.path.join(tempfile.gettempdir(), f"personal-capture-{session}.done")
-        if os.path.exists(marker):
-            sys.exit(0)
-        try:
-            open(marker, "w").close()
-        except OSError:
-            pass
+    # Stop fires at the end of every turn, not once per session. The old guard
+    # wrote a flag on the first Stop and returned early ever after, so the only
+    # transcript this hook ever read was the opening turn -- one prompt, the
+    # turn least likely to carry a durable fact. That is why the Claude side
+    # looked dead for a week: it was not silent, it had already spoken once.
+    # Every Stop is a candidate now, and the marker holds progress instead of a
+    # flag: dispatch again once the user has typed another MIN_CHARS worth,
+    # which is the same floor the worker needs before it can say anything.
+    progress = _progress_path(data.get("session_id"))
+    seen = _progress(progress)
+    typed = sum(len(m) for m in _user_messages(transcript))
+    if typed - seen < MIN_CHARS:
+        reason = "no-user-text" if not typed else (
+            "too-short" if not seen else "no-new-input")
+        record_metric("personal-capture", "skip", os.getcwd(), reason)
+        sys.exit(0)
 
     note_path, _ = find_note(vault_dir, "agent_profile: true")
     if not note_path:
@@ -342,6 +382,7 @@ def main():
     except Exception:
         record_metric("personal-capture", "skip", vault_dir, "spawn-failed")
         sys.exit(0)
+    _record_progress(progress, typed)
     # The worker is detached and reports for itself; this pairs with whatever
     # it records, so a dispatch with no follow-up means the worker died.
     record_metric("personal-capture", "dispatch", os.path.dirname(note_path))
