@@ -30,6 +30,17 @@ piece is a silent no-op.
   The bound is the point: this rides in every request of the session, so it holds the
   minimum needed to start work and leaves the rest to `vault_read`. Opt-in via
   `VAULT_DIR`.
+- `hooks/personal-capture.py` — Stop hook, the write half for facts about the
+  *user*. Those never arrive as a tool call the way a repo fact does; they arrive
+  as prose in a prompt, so the only thing that can notice one is a model. At the
+  end of a session this sends what the user typed (never tool output, never the
+  assistant's words, never anything that looks like a credential) to a local
+  OpenAI-compatible endpoint (`QWEN_BASE_URL`) and appends up to three durable
+  facts to the profile note, each stamped with the date. It writes into its own
+  section and never into the `agent-card` block: that block is injected into
+  every later session, so an unsupervised write there would amplify a bad
+  inference indefinitely. The model call runs detached — a Stop hook otherwise
+  holds up the end of the turn. Opt-in via `VAULT_DIR` + `QWEN_BASE_URL`.
 - `hooks/vault_common.py` — the project-key and note lookup both hooks share. A key
   resolved differently in one hook than the other fails silently (the note is simply
   never found), so it exists once.
@@ -54,6 +65,11 @@ extra deploy step is needed — only the hook `command` paths in
 
 - `MEM_OBSIDIAN_VAULT` — write target for `obsidian-mirror.py`. Typically a
   subfolder of your vault, e.g. `<vault>/_mem-log`.
-- `VAULT_DIR` — read target for `vault-search` and `compile-nudge.py`. The vault
-  root. Separate from `MEM_OBSIDIAN_VAULT` on purpose: one is where the mirror
-  writes, the other is what gets searched/read back.
+- `VAULT_DIR` — read target for `vault-search` and every hook except the mirror.
+  The vault root. Separate from `MEM_OBSIDIAN_VAULT` on purpose: one is where the
+  mirror writes, the other is what gets searched/read back. It must be exported
+  where non-interactive processes see it (`~/.zshenv`, not `~/.zshrc`) — set only
+  in an MCP server's own env block, the hooks never see it and quietly do nothing.
+- `QWEN_BASE_URL` — OpenAI-compatible endpoint for `personal-capture.py`, e.g. a
+  local vLLM at `http://host:8002/v1`. Unset means that hook is off.
+  `PERSONAL_CAPTURE_MODEL` overrides the model id.

@@ -130,5 +130,60 @@ else
 fi
 
 echo
+echo "personal-capture"
+
+# The model call is the one part that needs a server, so the gates around it
+# are what these tests pin: what leaves the machine, and what never does.
+pc() { python3 -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('pc', '$HOOKS_DIR/personal-capture.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+$1
+"; }
+
+TRANSCRIPT="$VAULT/transcript.jsonl"
+cat >"$TRANSCRIPT" <<'EOF'
+{"type":"user","message":{"role":"user","content":"ben hiç makale okumam"}}
+{"type":"user","message":{"role":"user","content":"<system-reminder>machine noise</system-reminder>"}}
+{"type":"user","message":{"role":"user","content":"<local-command-caveat>noise</local-command-caveat>"}}
+{"type":"user","message":{"role":"user","content":"benim şifrem hunter2"}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"tool output"}]}}
+{"type":"assistant","message":{"role":"assistant","content":"my own words"}}
+{"type":"user","message":{"role":"user","content":"ben hiç makale okumam"}}
+EOF
+
+out="$(pc "print(m._user_messages('$TRANSCRIPT'))")"
+check "keeps what the user typed" "makale okumam" "$out"
+check_absent "drops hook/system records" "machine noise" "$out"
+check_absent "drops slash-command records" "local-command" "$out"
+check_absent "drops tool results" "tool output" "$out"
+check_absent "never sends the assistant's own words" "my own words" "$out"
+check_absent "credentials never leave the machine" "hunter2" "$out"
+if [[ "$(pc "print(len(m._user_messages('$TRANSCRIPT')))")" == "1" ]]; then
+  pass "repeated prompts are sent once"
+else fail "repeated prompts are sent once" "$(pc "print(m._user_messages('$TRANSCRIPT'))")"; fi
+
+out="$(pc "print(m._is_new('Makale okumuyor, repo okuyor.', ['- Makale okumuyor, bilgiyi repolardan alıyor.']))")"
+check "a fact the note already makes is not re-added" "False" "$out"
+out="$(pc "print(m._is_new('Ankara da yasiyor.', ['- Makale okumuyor.']))")"
+check "a genuinely new fact is added" "True" "$out"
+
+# The card is what vault-inject puts into every future session; an
+# unsupervised writer must never grow it.
+cp "$VAULT/profile.md" "$VAULT/profile-before.md"
+pc "m._append('$VAULT/profile.md', ['Ankara da yasiyor.'])" >/dev/null
+out="$(cat "$VAULT/profile.md")"
+check "captured facts land in their own dated section" "auto:$(date +%Y-%m-%d)" "$out"
+card_lines_before="$(sed -n '/agent-card:start/,/agent-card:end/p' "$VAULT/profile-before.md" | wc -l)"
+card_lines_after="$(sed -n '/agent-card:start/,/agent-card:end/p' "$VAULT/profile.md" | wc -l)"
+if [[ "$card_lines_before" == "$card_lines_after" ]]; then
+  pass "the injected card is left untouched"
+else fail "the injected card is left untouched" "$card_lines_before -> $card_lines_after"; fi
+
+out="$(echo '{"transcript_path":"'"$TRANSCRIPT"'","session_id":"t1"}' | VAULT_DIR="$VAULT" QWEN_BASE_URL="" python3 "$HOOKS_DIR/personal-capture.py" 2>&1)"
+if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
+else fail "no model endpoint is a silent no-op" "$out"; fi
+
+echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
