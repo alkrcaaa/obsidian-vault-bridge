@@ -48,7 +48,14 @@ def _response_text(tool_response):
         if texts:
             return "\n".join(texts)
     if isinstance(tool_response, dict):
-        parts = tool_response.get("content") or []
+        # Claude spells the parts list `content`; Qwen spells it `llmContent`.
+        # Missing the second one did not fail loudly -- it fell through to the
+        # json.dumps() below, which escapes every quote, so the regex that
+        # looks for `project "<name>"` saw `project \"<name>\"` and matched
+        # nothing. Every Qwen save was silently mirrored as `unparsed`.
+        parts = tool_response.get("content") or tool_response.get("llmContent") or []
+        if isinstance(parts, str):
+            return parts
         texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
         if texts:
             return "\n".join(texts)

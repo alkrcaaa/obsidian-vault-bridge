@@ -211,6 +211,40 @@ out="$(echo '{"transcript_path":"'"$TRANSCRIPT"'","session_id":"t1"}' | VAULT_DI
 if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
 else fail "no model endpoint is a silent no-op" "$out"; fi
 
+# --- obsidian-mirror: both hosts spell the response parts differently -------
+# Claude sends tool_response.content, Qwen sends tool_response.llmContent.
+# Only the first was read, and the miss was not an error: the payload fell
+# through to json.dumps(), whose escaped quotes made the "Saved as
+# observation" regex match nothing, so every Qwen save was logged `unparsed`
+# and mirrored nowhere.
+MIRROR="$(mktemp -d)"
+trap 'rm -rf "$VAULT" "$REPO" "$MIRROR"' EXIT
+# Embedded in JSON below, so the quotes around the project name are escaped
+# here rather than at each use site.
+SAVED='Saved as observation #999 [bugfix] in project \"'"$PROJECT"'\"'
+
+mirror() { # response-json
+  echo '{"tool_name":"mcp__mem-lite__mem_save","tool_input":{"title":"t","content":"c"},"tool_response":'"$1"'}' \
+    | MEM_OBSIDIAN_VAULT="$MIRROR" HOME="$(mktemp -d)" python3 "$HOOKS_DIR/obsidian-mirror.py" 2>&1
+}
+day_file="$MIRROR/$PROJECT/$(date +%Y-%m-%d).md"
+
+mirror '{"content":[{"text":"'"$SAVED"'"}]}' >/dev/null
+check "Claude's response shape is mirrored" "#999" "$(cat "$day_file" 2>/dev/null)"
+
+rm -rf "$MIRROR"/*
+mirror '{"llmContent":[{"text":"'"$SAVED"'"}]}' >/dev/null
+check "Qwen's response shape is mirrored" "#999" "$(cat "$day_file" 2>/dev/null)"
+
+rm -rf "$MIRROR"/*
+mirror '{"llmContent":"'"$SAVED"'"}' >/dev/null
+check "a bare-string parts field is mirrored" "#999" "$(cat "$day_file" 2>/dev/null)"
+
+rm -rf "$MIRROR"/*
+mirror '{"llmContent":[{"text":"Skipped as a duplicate"}]}' >/dev/null
+if [[ ! -e "$day_file" ]]; then pass "an unparsable response writes nothing"
+else fail "an unparsable response writes nothing" "$(cat "$day_file")"; fi
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
