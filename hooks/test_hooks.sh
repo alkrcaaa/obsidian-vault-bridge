@@ -20,7 +20,15 @@ check_absent() { # name, forbidden-substring, actual
 
 VAULT="$(mktemp -d)"
 REPO="$(mktemp -d)"
-trap 'rm -rf "$VAULT" "$REPO"' EXIT
+
+# Redirect HOME for the whole run, not just the cases that assert on it.
+# record_metric() resolves the host kit through $HOME, so every hook a test
+# fired was appending to the real ~/.claude/hook-metrics.jsonl: 68 of the 83
+# vault-inject "sessions" on this machine were test runs. That is telemetry
+# lying about production, and it lied to the one question the metrics exist
+# to answer -- what does this hook actually cost in real sessions.
+export HOME="$(mktemp -d)"
+trap 'rm -rf "$VAULT" "$REPO" "$HOME"' EXIT
 
 git -C "$REPO" init -q 2>/dev/null
 PROJECT="$(basename "$(dirname "$REPO")")--$(basename "$REPO")"
@@ -72,6 +80,82 @@ check "names the note so the agent can read the rest" "Code/repo.md" "$out"
 
 out="$(echo '{"cwd":"/nonexistent"}' | VAULT_DIR="$VAULT" python3 "$HOOKS_DIR/vault-inject.py" 2>&1 | decode)"
 check_absent "a repo with no note injects nothing" "CARD-BODY-MARKER" "$out"
+
+# An empty frontmatter field used to return the `---` that closes the block,
+# so an uncompiled note was announced as "compiled ---" and compile-nudge --
+# which parses the same field as a date -- failed and exited on every note
+# that had never been compiled.
+fm() { python3 -c '
+import sys; sys.path.insert(0, sys.argv[1])
+from vault_common import frontmatter_field
+print(repr(frontmatter_field(sys.stdin.read(), "last_compiled")))
+' "$HOOKS_DIR"; }
+out="$(printf -- '---\nlast_compiled:\n---\n' | fm)"
+check "an empty frontmatter field reads as unset" "None" "$out"
+out="$(printf -- '---\nlast_compiled: "2026-08-17"\n---\n' | fm)"
+check "a quoted frontmatter value is unquoted" "'2026-08-17'" "$out"
+out="$(printf -- '---\nlast_compiled: 2026-08-17\n---\n' | fm)"
+check "a plain frontmatter value still reads" "'2026-08-17'" "$out"
+
+# A key that is a prefix of a longer one used to win on a substring test, so
+# the note for `<repo>_streaming_operations` was injected for `<repo>`.
+cat >"$VAULT/Code/repo-longer.md" <<EOF
+---
+mem_lite_project: ${PROJECT}_extra
+---
+
+# repo-longer
+
+<!-- agent-card:start -->
+WRONG-NOTE-MARKER
+<!-- agent-card:end -->
+EOF
+out="$(run_inject "$VAULT")"
+check_absent "a longer project key is not matched by prefix" "WRONG-NOTE-MARKER" "$out"
+rm -f "$VAULT/Code/repo-longer.md"
+
+# Several notes legitimately share a repo's key -- one per component. The note
+# named after the repo is the one to inject; walk order decided it before.
+mkdir -p "$VAULT/Code/parts"
+cat >"$VAULT/Code/parts/aaa-component.md" <<EOF
+---
+mem_lite_project: $PROJECT
+---
+
+# aaa-component
+
+<!-- agent-card:start -->
+COMPONENT-MARKER
+<!-- agent-card:end -->
+EOF
+mv "$VAULT/Code/repo.md" "$VAULT/Code/$(basename "$REPO").md"
+out="$(run_inject "$VAULT")"
+check "the note named after the repo wins over a component note" "CARD-BODY-MARKER" "$out"
+check_absent "the component note is not injected instead" "COMPONENT-MARKER" "$out"
+mv "$VAULT/Code/$(basename "$REPO").md" "$VAULT/Code/repo.md"
+rm -rf "$VAULT/Code/parts"
+
+# An uncompiled note is a heading with an empty bullet under it. Injecting
+# that spends the ambient budget on nothing, so it must count as no slice.
+cat >"$VAULT/Code/stub.md" <<EOF
+---
+mem_lite_project: ${PROJECT}-stub
+---
+
+# stub
+
+## Mimari Ozet
+-
+
+## Son Kararlar
+-
+EOF
+STUBREPO="$(dirname "$REPO")/$(basename "$REPO")-stub"
+mkdir -p "$STUBREPO" && git -C "$STUBREPO" init -q 2>/dev/null
+out="$(echo "{\"cwd\":\"$STUBREPO\"}" | VAULT_DIR="$VAULT" python3 "$HOOKS_DIR/vault-inject.py" 2>&1)"
+if [[ -z "$out" ]]; then pass "an uncompiled stub note injects nothing"
+else fail "an uncompiled stub note injects nothing" "expected no output, got: ${out:0:120}"; fi
+rm -rf "$VAULT/Code/stub.md" "$STUBREPO"
 
 # Unconfigured means no env AND no installer config file -- HOME is redirected
 # so the real machine's ~/.config/dev-agent-kit/vault.env cannot answer for it.
@@ -210,6 +294,64 @@ else fail "the injected card is left untouched" "$card_lines_before -> $card_lin
 out="$(echo '{"transcript_path":"'"$TRANSCRIPT"'","session_id":"t1"}' | VAULT_DIR="$VAULT" QWEN_BASE_URL="" HOME="$(mktemp -d)" python3 "$HOOKS_DIR/personal-capture.py" 2>&1)"
 if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
 else fail "no model endpoint is a silent no-op" "$out"; fi
+
+# --- compile-nudge: the notes that need compiling most were the silent ones --
+echo
+echo "compile-nudge"
+
+# Its own mem-lite DB under the redirected HOME, and its own TMPDIR so the
+# once-per-day marker cannot be a leftover from the real machine.
+mkdir -p "$HOME/.claude-mem-lite"
+python3 - "$HOME/.claude-mem-lite/claude-mem-lite.db" "$PROJECT" <<'EOF'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("CREATE TABLE observations (project TEXT, created_at TEXT)")
+con.executemany("INSERT INTO observations VALUES (?, '2026-01-01T00:00:00')",
+                [(sys.argv[2],)] * 12)
+con.commit()
+EOF
+
+nudge() {
+  echo "{\"cwd\":\"$REPO\"}" | TMPDIR="$(mktemp -d)" VAULT_DIR="$VAULT" \
+    python3 "$HOOKS_DIR/compile-nudge.py" 2>&1
+}
+
+# `last_compiled:` left blank is a note nobody ever compiled, not a malformed
+# date. Reading it as the frontmatter's closing `---` made every such note
+# unparsable, so the hook exited and 18 stub notes never asked to be filled.
+python3 - "$VAULT/Code/repo.md" <<'EOF'
+import sys
+p = sys.argv[1]
+t = open(p, encoding="utf-8").read()
+open(p, "w", encoding="utf-8").write(t.replace("last_compiled: 2026-01-01",
+                                               "last_compiled:"))
+EOF
+out="$(nudge)"
+check "a never-compiled note asks to be compiled" "never been compiled" "$out"
+
+# A value that is there but unparsable is a typo to fix by hand, not a backlog.
+python3 - "$VAULT/Code/repo.md" <<'EOF'
+import sys
+p = sys.argv[1]
+t = open(p, encoding="utf-8").read()
+open(p, "w", encoding="utf-8").write(t.replace("last_compiled:",
+                                               "last_compiled: not-a-date"))
+EOF
+out="$(nudge)"
+if [[ -z "$out" ]]; then pass "a malformed date stays silent"
+else fail "a malformed date stays silent" "${out:0:120}"; fi
+
+# A quoted date is valid YAML and used to be unparsable too -- the note then
+# looked malformed and never nudged however stale it got.
+python3 - "$VAULT/Code/repo.md" <<'EOF'
+import sys
+p = sys.argv[1]
+t = open(p, encoding="utf-8").read()
+open(p, "w", encoding="utf-8").write(t.replace("last_compiled: not-a-date",
+                                               'last_compiled: "2026-01-01"'))
+EOF
+out="$(nudge)"
+check "a quoted date is parsed and its note nudged" "is behind" "$out"
 
 # --- obsidian-mirror: both hosts spell the response parts differently -------
 # Claude sends tool_response.content, Qwen sends tool_response.llmContent.

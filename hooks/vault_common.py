@@ -83,18 +83,34 @@ def infer_project(cwd):
     return re.sub(r"[^a-zA-Z0-9_.-]", "-", raw)[:100]
 
 
-def find_note(vault_dir, marker, read_bytes=1000):
-    """First (path, head) whose frontmatter contains `marker`, else (None, None).
+def find_note(vault_dir, marker, read_bytes=1000, prefer=None):
+    """Best (path, head) whose frontmatter carries `marker`, else (None, None).
 
     `read_bytes` bounds the scan: frontmatter lives at the top of the file,
     so there is no reason to read a whole note to reject it. Pass more when
     the caller also wants body text out of the same read.
+
+    Two things this deliberately does not do naively:
+
+    A substring test matched a prefix of a longer key -- looking for
+    `mem_lite_project: workspace--sida_azn` found the note whose key is
+    `workspace--sida_azn_streaming_operations`, so the wrong repo's note was
+    injected and nothing said so. The marker must fill a frontmatter line.
+
+    Returning the first walk hit made the answer depend on filesystem order
+    when several notes share a key, which is normal: a repo with per-component
+    notes has one per component, all pointing at the same project. `prefer`
+    (a filename stem) names the note that should win; ties then break on the
+    shallowest path and finally alphabetically, so the choice is at least the
+    same one every session.
     """
     if not vault_dir or not os.path.isdir(vault_dir):
         return None, None
+    line_re = re.compile(rf"^{re.escape(marker)}\s*$", re.MULTILINE)
+    matches = []
     for dirpath, dirnames, filenames in os.walk(vault_dir):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-        for name in filenames:
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for name in sorted(filenames):
             if not name.endswith(".md"):
                 continue
             path = os.path.join(dirpath, name)
@@ -103,9 +119,16 @@ def find_note(vault_dir, marker, read_bytes=1000):
                     head = f.read(read_bytes)
             except OSError:
                 continue
-            if marker in head:
-                return path, head
-    return None, None
+            if line_re.search(head):
+                matches.append((path, head))
+    if not matches:
+        return None, None
+    matches.sort(key=lambda m: (
+        os.path.splitext(os.path.basename(m[0]))[0] != prefer,
+        m[0].count(os.sep),
+        m[0],
+    ))
+    return matches[0]
 
 
 def record_metric(hook, action, cwd, detail=""):
@@ -142,8 +165,22 @@ def read_text(path, limit=60000):
 
 
 def frontmatter_field(text, field):
-    m = re.search(rf"^{re.escape(field)}:\s*(\S.*?)\s*$", text, re.MULTILINE)
-    return m.group(1) if m else None
+    r"""The field's value, or None when it is absent or left blank.
+
+    `\s*` used to stand between the colon and the value, and `\s` crosses a
+    newline: an empty `last_compiled:` therefore returned the `---` that
+    closes the frontmatter. It read as a value, so nothing looked broken --
+    vault-inject announced notes as "compiled ---" and compile-nudge, which
+    parses that same field as a date, failed and exited silently on every
+    uncompiled note in the vault. The one class of note that most needs a
+    synthesis pass was the one class that could never ask for it.
+
+    Quotes are stripped for the same reason: `last_compiled: "2026-08-17"` is
+    valid YAML and was another silent parse failure.
+    """
+    m = re.search(rf"^{re.escape(field)}:[^\S\n]*(\S.*?)[^\S\n]*$",
+                  text, re.MULTILINE)
+    return m.group(1).strip('"\'') if m else None
 
 
 def agent_card(text):

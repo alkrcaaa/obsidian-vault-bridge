@@ -46,7 +46,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from vault_common import (
-        find_note, infer_project, record_metric, vault_dir as resolve_vault,
+        find_note, frontmatter_field, infer_project, record_metric,
+        vault_dir as resolve_vault,
     )
 except Exception:
     sys.exit(0)
@@ -61,11 +62,14 @@ MEM_DB = os.path.join(os.path.expanduser("~"), ".claude-mem-lite", "claude-mem-l
 
 
 def _last_compiled(head):
-    m = re.search(r"^last_compiled:\s*(\S+)", head, re.MULTILINE)
-    if not m:
+    # Shared with vault-inject rather than re-derived here: a second copy of
+    # this parse is how the two hooks disagree about the same note, and both
+    # disagree in silence.
+    value = frontmatter_field(head, "last_compiled")
+    if not value:
         return None
     try:
-        return datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
@@ -128,7 +132,13 @@ def main():
     cwd = data.get("cwd") or os.getcwd()
     project = infer_project(cwd)
 
-    note_path, head = find_note(vault_dir, f"mem_lite_project: {project}")
+    # Same preference vault-inject uses. Without it the two hooks can resolve
+    # the same key to different notes when a repo has per-component notes, and
+    # then one nags about a note the other never injects.
+    note_path, head = find_note(
+        vault_dir, f"mem_lite_project: {project}",
+        prefer=project.rsplit("--", 1)[-1],
+    )
     if not note_path:
         # No note yet. Where a new one belongs is a user decision, so this hook
         # still writes nothing -- but staying silent meant a repo with no note
@@ -151,7 +161,28 @@ def main():
 
     last_compiled = _last_compiled(head)
     if last_compiled is None:
-        sys.exit(0)  # malformed/missing date -- don't guess, don't nag
+        # A blank `last_compiled:` is not a malformed date, it is a note nobody
+        # has ever compiled -- 18 of this vault's notes, every one of them a
+        # heading with an empty bullet under it. Lumping it in with "malformed"
+        # meant the notes that most needed a synthesis pass were precisely the
+        # ones that could never ask for one. A value that is present but
+        # unparsable still gets the old silence: that is a typo to fix by hand,
+        # not a backlog to announce.
+        if frontmatter_field(head, "last_compiled"):
+            sys.exit(0)
+        total = _obs_count(project)
+        if total < BOOTSTRAP_MIN_OBS or not _notify_once(project, "vault-uncompiled"):
+            sys.exit(0)
+        rel_note = os.path.relpath(note_path, vault_dir)
+        record_metric("compile-nudge", "uncompiled", cwd, f"{total}obs")
+        _emit(
+            f"📓 {project}'s vault note ({rel_note}) has never been compiled, "
+            f"and mem-lite holds {total} entries for it.",
+            f"[compile-nudge] {rel_note} exists but its `last_compiled` is empty and "
+            f"its sections are placeholders, so session start injects nothing useful "
+            f"for this repo while mem-lite holds {total} observations. If the user "
+            f"agrees, compile those into the note's sections and set `last_compiled`.",
+        )
 
     days_stale = (datetime.now(timezone.utc) - last_compiled).days
     new_obs = _obs_count(project, last_compiled)

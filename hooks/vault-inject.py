@@ -28,6 +28,10 @@ fallback: with no explicit card, nothing is injected. Personal notes leak
 in a way architecture notes do not, so opting in there is a positive act,
 never a default.
 
+Either way the slice has to carry something. An uncompiled note is a heading
+with an empty bullet under it -- injecting that spends the ambient budget to
+say nothing, so a slice with no content is treated as no slice at all.
+
 Opt-in and fail-open, same as the rest of the bridge: no VAULT_DIR, no
 note, unreadable file -> exit 0 in silence.
 """
@@ -62,15 +66,35 @@ def _cap(text, limit):
     return (cut[:nl] if nl > limit // 2 else cut).rstrip() + "\n[…]"
 
 
+def _has_content(slice_text):
+    """True if anything survives once headings and empty bullets are dropped.
+
+    18 of this vault's repo notes are uncompiled stubs: a `## Mimari Ozet`
+    heading with a lone `-` under it. That slice is 16 characters that say
+    nothing, and injection is ambient -- it rides every request of the
+    session. Cost with no content is the one case worth refusing outright.
+    """
+    for line in slice_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lstrip("-*+ \t"):
+            return True
+    return False
+
+
 def _repo_slice(vault_dir, project):
-    note_path, _ = find_note(vault_dir, f"mem_lite_project: {project}")
+    note_path, _ = find_note(
+        vault_dir, f"mem_lite_project: {project}",
+        prefer=project.rsplit("--", 1)[-1],
+    )
     if not note_path:
         return None
     text = read_text(note_path)
     if not text:
         return None
     card = agent_card(text) or first_section(text, REPO_CARD_CHARS)
-    if not card:
+    if not card or not _has_content(card):
         return None
     rel = os.path.relpath(note_path, vault_dir)
     compiled = frontmatter_field(text, "last_compiled")
@@ -87,7 +111,7 @@ def _profile_slice(vault_dir):
     if not note_path:
         return None
     card = agent_card(read_text(note_path))
-    if not card:
+    if not card or not _has_content(card):
         return None  # opted in but marked no slice -- that is a choice, honour it
     rel = os.path.relpath(note_path, vault_dir)
     return (
@@ -124,6 +148,10 @@ def main():
         sys.exit(0)
 
     if not parts:
+        # No note for this repo, or one whose slice is an empty stub. Both are
+        # normal, and both look identical to a broken hook from outside, so
+        # they leave a line: hook-stats can tell "nothing to say" from "dead".
+        record_metric("vault-inject", "skip", cwd, "no-slice")
         sys.exit(0)
 
     record_metric("vault-inject", "inject", cwd, f"{len(parts)}card")
