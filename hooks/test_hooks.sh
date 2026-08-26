@@ -809,6 +809,23 @@ m.MEM_DB = '$CDB'
 print('novault=%s' % (m.observations('genel', None, None),))
 ")"
 check "without a vault root the catch-all compiles nothing" "novault=([], 0)" "$out"
+
+# Every piece of framing in the compiler assumed a repo. Left alone, the
+# catch-all note would be headed "Mimari Özet" and the model told to summarise
+# a codebase -- a general conversation described as if it were software. The
+# heading the prompt asks for and the heading apply_compiled writes come from
+# one function for the same reason.
+rec="[{'text': '### 2026-08-26 [decision] x', 'importance': 1, 'created': '2026-08-26'}]"
+out="$(vc "
+for p in ('workspace--repo', 'genel'):
+    print(p, '|', m.card_heading(p), '|', m.system_prompt(p)[:70])
+    print(m.build_prompt(p, 'n.md', '(mevcut)', $rec, 1, 0).splitlines()[0])
+")"
+check "a repo note is still framed as a repo" 'deposunun vault notu' "$out"
+check "and still headed Mimari Özet" "workspace--repo | ## Mimari Özet" "$out"
+check "the catch-all is not framed as a repo" "repo dışında kalan işlerin vault notu" "$out"
+check "and gets its own card heading" "genel | ## Genel Özet" "$out"
+check_absent "nor is it called a depo in its system prompt" "genel | ## Genel Özet | Sen bir bilgi tabanı derleyicisisin. Bir yazılım deposu" "$out"
 rm -rf "$CREPO" "$CPLAIN" "$CMIRROR" "$CVAULT" "$(dirname "$CDB")"
 
 echo

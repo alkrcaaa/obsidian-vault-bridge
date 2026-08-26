@@ -61,6 +61,21 @@ CARD_HEADING = "## Mimari Özet"
 SECTIONS = ("## Son Kararlar", "## Açık Sorular")
 SOURCES_HEADING = "## Kaynaklar"
 
+# The catch-all note is not a repo, and every piece of framing here assumes one
+# -- the card is headed "Mimari Özet", the prompt calls the subject a depo and
+# asks for structural facts about a codebase. Pointed at a general conversation
+# that produces a note describing a chat as if it were software. The profile
+# note already had to solve the same problem (it passes heading=None rather
+# than stamping "architecture" over a description of a person); this is the
+# third subject the compiler serves, so the framing becomes a lookup.
+CATCHALL_CARD_HEADING = "## Genel Özet"
+CATCHALL_SUBJECT = "repo dışında kalan işlerin"
+CATCHALL_CARD_RULE = (
+    "3-6 madde. Bu bölüm her oturumun başında ajana enjekte edilen karttır — "
+    "repoya bağlı olmayan işlerde kalıcı olarak geçerli olan gerçekler olsun, "
+    "haber değil."
+)
+
 # How much material a project has to accumulate before a missing note is worth
 # reporting. Low enough that a repo does not stay silent for weeks, high enough
 # that a single stray observation does not ask for a note.
@@ -86,6 +101,17 @@ SYSTEM_PROMPT = (
     "indirgiyorsun. Yeni bilgi UYDURMUYORSUN: sadece sana verilen kayıtlarda geçen "
     "şeyleri yazıyorsun. Çıktın Türkçe ve madde madde. Asla dosya adı, başlık adı "
     "veya bölüm adı önermiyorsun; sadece istenen üç bölümün içeriğini üretiyorsun."
+)
+
+
+CATCHALL_SYSTEM_PROMPT = (
+    "Sen bir bilgi tabanı derleyicisisin. Bir kullanıcının herhangi bir kod "
+    "deposuna bağlı olmayan işleri hakkında biriken ham kayıtları, bugün geçerli "
+    "olan halini anlatan kısa ve okunabilir bir nota indirgiyorsun. Konu bir "
+    "yazılım deposu DEĞİL: mimari anlatmaya çalışma, kayıtlarda ne varsa onu "
+    "özetle. Yeni bilgi UYDURMUYORSUN. Çıktın Türkçe ve madde madde. Asla dosya "
+    "adı, başlık adı veya bölüm adı önermiyorsun; sadece istenen üç bölümün "
+    "içeriğini üretiyorsun."
 )
 
 
@@ -431,6 +457,22 @@ def observations(project, since, vault_root=None):
 # the model call
 
 
+def card_heading(project):
+    """The heading stamped over a note's injected card.
+
+    Read in two places that must not drift: the prompt tells the model which
+    heading it is filling, and apply_compiled writes it. Naming them separately
+    is how the model gets asked for one section and the writer produces
+    another.
+    """
+    return CATCHALL_CARD_HEADING if project == CATCHALL_PROJECT else CARD_HEADING
+
+
+def system_prompt(project):
+    """Repo compiler or general compiler -- the subject is not the same."""
+    return CATCHALL_SYSTEM_PROMPT if project == CATCHALL_PROJECT else SYSTEM_PROMPT
+
+
 def build_prompt(project, note_name, current, records, total, dropped):
     material = "\n\n".join(r["text"] for r in records)
     scope = (
@@ -438,7 +480,16 @@ def build_prompt(project, note_name, current, records, total, dropped):
         + (f" ({total} kaydın en önemli/en yenileri; {dropped} tanesi yer nedeniyle "
            "dışarıda bırakıldı)" if dropped else "")
     )
-    return f"""Aşağıda `{project}` deposunun vault notu ve o depo hakkında biriken ham kayıtlar var. {scope}.
+    catchall = project == CATCHALL_PROJECT
+    subject = CATCHALL_SUBJECT if catchall else f"`{project}` deposunun"
+    about = "o işler" if catchall else "o depo"
+    heading = card_heading(project)
+    card_rule = CATCHALL_CARD_RULE if catchall else (
+        "3-6 madde. Bu bölüm her oturumun başında ajana enjekte edilen karttır — "
+        "depoyu ilk kez açan birinin bilmesi gereken yapısal gerçekler olsun, "
+        "haber değil."
+    )
+    return f"""Aşağıda {subject} vault notu ve {about} hakkında biriken ham kayıtlar var. {scope}.
 
 Görevin: notun ÜÇ bölümünü güncel haliyle YENİDEN YAZMAK. Bu bir günlük değil, kümülatif bir özet — tarihli yeni bir bölüm ekleme, mevcut maddeleri de gözden geçir.
 
@@ -457,7 +508,7 @@ KURALLAR:
 - Yeni kayıtlardan geleni ekle; aynı konudaki iki maddeyi tek maddede birleştirebilirsin, ama içerik kaybetmeden.
 - Ham kayıtlarda geçmeyen hiçbir şey yazma. Emin değilsen yazma.
 - Her madde tek satır, `- ` ile başlar. Kod/dosya/araç adlarını backtick içinde ver.
-- "## Mimari Özet": 3-6 madde. Bu bölüm her oturumun başında ajana enjekte edilen karttır — depoyu ilk kez açan birinin bilmesi gereken yapısal gerçekler olsun, haber değil.
+- "{heading}": {card_rule}
 - "## Son Kararlar": en fazla 16 madde. Alınmış ve yürürlükte olan kararlar; her maddede kararın NEDENİ kısaca geçsin.
 - "## Açık Sorular": en fazla 6 madde. Sadece gerçekten açık olanlar; kayıtlarda kapandığı görülen bir soruyu yazma. Açık soru yoksa tek bir `- (yok)` maddesi yaz.
 
@@ -748,7 +799,7 @@ def apply_compiled(current, parsed, project, vault_root, day):
     section was deleted outright, which is the same shape of miss as testing
     an off-switch's mechanism instead of whether it switched anything off.
     """
-    updated = replace_card(current, parsed["arch"])
+    updated = replace_card(current, parsed["arch"], card_heading(project))
     updated = replace_section(updated, SECTIONS[0], parsed["decisions"])
     updated = replace_section(updated, SECTIONS[1], parsed["questions"])
     links = source_links(project, vault_root)
@@ -779,7 +830,7 @@ def compile_note(path, project, args, vault_root):
 
     prompt = build_prompt(project, os.path.basename(path), managed_excerpt(current),
                           records, total, dropped)
-    raw, err = run_model(prompt, args.model, args.timeout)
+    raw, err = run_model(prompt, args.model, args.timeout, system_prompt(project))
     if err:
         log(f"  ! {project}: model çağrısı başarısız ({err})")
         record_metric("vault-compile", "error", vault_root, f"{project}:{err}")
