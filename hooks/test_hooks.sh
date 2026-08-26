@@ -665,6 +665,21 @@ print(m.apply_compiled(note, parsed, 'workspace--repo', '$STMP', '2026-08-26'))
 check "the compiled note carries a Kaynaklar section" "## Kaynaklar" "$out"
 check "and the link lands in it" "[[_mem-log/workspace--repo/2026-08-26|" "$out"
 check "the compile is still stamped" "last_compiled: 2026-08-26" "$out"
+
+# A project under the compile threshold is skipped before the section is ever
+# rewritten, so every day file it collects meanwhile would stay an orphan.
+# Linking costs nothing -- the paths come off the filesystem -- so it must not
+# wait on a compile.
+mkdir -p "$STMP/note"
+printf -- '---\nmem_lite_project: workspace--repo\nlast_compiled: 2026-08-01\n---\n\n# repo\n' \
+  > "$STMP/note/repo.md"
+out="$(vc "
+class A: apply = True
+m.refresh_sources('$STMP/note/repo.md', 'workspace--repo', A(), '$STMP')
+print(open('$STMP/note/repo.md').read())
+")"
+check "links are refreshed without a compile" "[[_mem-log/workspace--repo/2026-08-26|" "$out"
+check_absent "and no compile date is stamped by it" "last_compiled: 2026-08-26" "$out"
 rm -rf "$STMP"
 
 ITMP="$(mktemp -d)"

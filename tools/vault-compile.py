@@ -625,6 +625,34 @@ def source_links(project, vault_root):
     return [f"- [[{MEM_LOG_DIR}/{project}/{d}|{d} ham log]]" for d in days]
 
 
+def refresh_sources(path, project, args, vault_root):
+    """Keep `## Kaynaklar` current whether or not the note gets compiled.
+
+    Doing this only inside compile_note would leave the links as stale as the
+    compile threshold allows: obsidian-mirror files a new day file every day a
+    project sees work, but a project under the threshold is skipped before the
+    section is ever rewritten, so each of those days is an orphan until enough
+    observations pile up. Costs nothing to run -- the links come off the
+    filesystem, not the model -- so it has no reason to wait on a compile.
+    """
+    links = source_links(project, vault_root)
+    if not links:
+        return False
+    with open(path, "r", encoding="utf-8") as f:
+        current = f.read()
+    updated = replace_section(current, SOURCES_HEADING, links)
+    if updated == current:
+        return False
+    if not args.apply:
+        print(unified_diff(current, updated, os.path.relpath(path, vault_root)))
+        return False
+    if backup(path, vault_root) is None:
+        return False
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    return True
+
+
 def apply_compiled(current, parsed, project, vault_root, day):
     """Fold one model result into the note text.
 
@@ -761,6 +789,11 @@ def main():
             break
         outcome = compile_note(path, project, args, vault_root)
         tally[outcome] = tally.get(outcome, 0) + 1
+        # After the compile, so a note that was just rewritten is not backed up
+        # and written a second time for the same links.
+        if outcome not in ("dry-run", "error") and refresh_sources(
+                path, project, args, vault_root):
+            tally["sources-linked"] = tally.get("sources-linked", 0) + 1
 
     log("— özet: " + ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
     return 0 if not tally.get("error") and not tally.get("invalid") else 2
