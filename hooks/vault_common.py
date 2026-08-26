@@ -2,9 +2,9 @@
 """
 Shared vault lookups for the bridge's hooks.
 
-compile-nudge (is this repo's note behind?) and vault-inject (load this
-repo's note at session start) ask the vault the same two questions: what is
-this session's project key, and which note carries it. Answering them twice
+vault-inject (load this repo's note at session start) and vault-compile
+(which note does this project key own?) ask the vault the same two questions:
+what is this session's project key, and which note carries it. Answering them twice
 would be two chances to drift apart -- and a key resolved differently in one
 hook than the other fails silently: the note is simply never found, so the
 hook just stays quiet and nobody learns it broke.

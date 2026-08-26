@@ -3,7 +3,7 @@
 personal-capture hook (Stop).
 
 The repo half of this bridge learns on its own: an agent calls mem_save,
-obsidian-mirror files it, compile-nudge asks for a synthesis pass. The half
+obsidian-mirror files it, the daily vault-compile run synthesises it. The half
 about the *user* had no such trigger. Facts about a person do not arrive as
 a tool call -- they arrive as ordinary prose in a prompt ("I never read
 articles, mostly git repos"), and a hook is a regex, not a reader. So the

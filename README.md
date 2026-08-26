@@ -17,13 +17,13 @@ live in [DECISIONS.md](DECISIONS.md). Read it before changing a hook's contract.
   `$MEM_OBSIDIAN_VAULT/<project>/<YYYY-MM-DD>.md`. mem-lite's SQLite DB stays the
   source of truth; this is a read-only mirror for anyone who keeps notes in an
   Obsidian-style vault.
-- `hooks/compile-nudge.py` — UserPromptSubmit hook. If the vault has a compiled note
-  for the current project (frontmatter `mem_lite_project: <key>`) and it's fallen
-  behind mem-lite (8+ new observations or 14+ days since `last_compiled`), nudges
-  once per project per day. Never writes anything itself — the agent does the
-  synthesis, only with the user's go-ahead. Opt-in via `VAULT_DIR`. Also speaks up
-  when a project has 10+ observations and no note at all — otherwise a repo with no
-  note produced no nudge and so never got one.
+- `tools/vault-compile.py` — not a hook. A daily systemd user timer (installed by
+  dev-agent-kit's `install.sh`) runs `--all --apply` outside any session: it
+  rewrites the managed sections of every `Code/<repo>.md` from mem-lite, refreshes
+  the profile card from what `personal-capture` collected, and links the raw
+  `_mem-log` day files it drew on so they do not sit in the vault as orphans.
+  This replaced `compile-nudge`, a hook that asked the agent to compile and was
+  acted on zero times in three firings — see D3 in `DECISIONS.md`.
 - `hooks/vault-inject.py` — SessionStart hook, the read half of the loop. Injects the
   current repo's compiled note (matched on the same `mem_lite_project` key) and, if a
   note opts in with `agent_profile: true`, a profile card describing the user. What

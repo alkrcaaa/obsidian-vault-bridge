@@ -80,8 +80,15 @@ the session's job, and it loses to the task at hand every time. Making the nudge
 louder does not change that.
 
 **Don't.** Re-solve this by escalating the nudge, or by having a Stop hook
-compile silently. `compile-nudge` stays as the staleness signal; it still writes
-nothing itself.
+compile silently.
+
+**Since.** `compile-nudge` was kept at first as a staleness signal. Once the
+timer ran daily there was nothing left for it to report that the next run would
+not already have fixed, so it was removed rather than left to speak up about
+work that was already scheduled. Moving a job out of the session also means
+installing the thing that starts it: for the first three commits the compiler
+existed and nothing ran it, which is the same once-and-drift failure this
+decision set out to end.
 
 ---
 

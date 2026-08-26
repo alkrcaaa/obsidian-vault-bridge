@@ -3,7 +3,7 @@
 concept-capture hook (Stop).
 
 The third write path of this bridge. The first two learn about a *repo*
-(mem_save -> obsidian-mirror -> compile-nudge -> Code/<repo>.md) and about
+(mem_save -> obsidian-mirror -> vault-compile -> Code/<repo>.md) and about
 the *user* (personal-capture -> the profile note). Neither catches the
 thing that actually taught the user something: a concept explained at
 length in the middle of ordinary work -- how a scheduler places a pod, what

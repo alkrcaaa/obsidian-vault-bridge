@@ -83,8 +83,8 @@ out="$(echo '{"cwd":"/nonexistent"}' | VAULT_DIR="$VAULT" python3 "$HOOKS_DIR/va
 check_absent "a repo with no note injects nothing" "CARD-BODY-MARKER" "$out"
 
 # An empty frontmatter field used to return the `---` that closes the block,
-# so an uncompiled note was announced as "compiled ---" and compile-nudge --
-# which parses the same field as a date -- failed and exited on every note
+# so an uncompiled note was announced as "compiled ---", and the staleness
+# check that parses the same field as a date failed and exited on every note
 # that had never been compiled.
 fm() { python3 -c '
 import sys; sys.path.insert(0, sys.argv[1])
@@ -295,64 +295,6 @@ else fail "the injected card is left untouched" "$card_lines_before -> $card_lin
 out="$(echo '{"transcript_path":"'"$TRANSCRIPT"'","session_id":"t1"}' | VAULT_DIR="$VAULT" QWEN_BASE_URL="" HOME="$(mktemp -d)" python3 "$HOOKS_DIR/personal-capture.py" 2>&1)"
 if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
 else fail "no model endpoint is a silent no-op" "$out"; fi
-
-# --- compile-nudge: the notes that need compiling most were the silent ones --
-echo
-echo "compile-nudge"
-
-# Its own mem-lite DB under the redirected HOME, and its own TMPDIR so the
-# once-per-day marker cannot be a leftover from the real machine.
-mkdir -p "$HOME/.claude-mem-lite"
-python3 - "$HOME/.claude-mem-lite/claude-mem-lite.db" "$PROJECT" <<'EOF'
-import sqlite3, sys
-con = sqlite3.connect(sys.argv[1])
-con.execute("CREATE TABLE observations (project TEXT, created_at TEXT)")
-con.executemany("INSERT INTO observations VALUES (?, '2026-01-01T00:00:00')",
-                [(sys.argv[2],)] * 12)
-con.commit()
-EOF
-
-nudge() {
-  echo "{\"cwd\":\"$REPO\"}" | TMPDIR="$(mktemp -d)" VAULT_DIR="$VAULT" \
-    python3 "$HOOKS_DIR/compile-nudge.py" 2>&1
-}
-
-# `last_compiled:` left blank is a note nobody ever compiled, not a malformed
-# date. Reading it as the frontmatter's closing `---` made every such note
-# unparsable, so the hook exited and 18 stub notes never asked to be filled.
-python3 - "$VAULT/Code/repo.md" <<'EOF'
-import sys
-p = sys.argv[1]
-t = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(t.replace("last_compiled: 2026-01-01",
-                                               "last_compiled:"))
-EOF
-out="$(nudge)"
-check "a never-compiled note asks to be compiled" "never been compiled" "$out"
-
-# A value that is there but unparsable is a typo to fix by hand, not a backlog.
-python3 - "$VAULT/Code/repo.md" <<'EOF'
-import sys
-p = sys.argv[1]
-t = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(t.replace("last_compiled:",
-                                               "last_compiled: not-a-date"))
-EOF
-out="$(nudge)"
-if [[ -z "$out" ]]; then pass "a malformed date stays silent"
-else fail "a malformed date stays silent" "${out:0:120}"; fi
-
-# A quoted date is valid YAML and used to be unparsable too -- the note then
-# looked malformed and never nudged however stale it got.
-python3 - "$VAULT/Code/repo.md" <<'EOF'
-import sys
-p = sys.argv[1]
-t = open(p, encoding="utf-8").read()
-open(p, "w", encoding="utf-8").write(t.replace("last_compiled: not-a-date",
-                                               'last_compiled: "2026-01-01"'))
-EOF
-out="$(nudge)"
-check "a quoted date is parsed and its note nudged" "is behind" "$out"
 
 # --- obsidian-mirror: both hosts spell the response parts differently -------
 # Claude sends tool_response.content, Qwen sends tool_response.llmContent.
@@ -675,6 +617,56 @@ check "backups live in the vault's backup dir" ".vault-compile-backups" "$out"
 # the shipped template is keyed `workspace--{{REPO}}`, which does not start
 # with a brace. It was iterated on every run, and the first time it matched
 # new observations the compile would have landed in the template itself.
+# obsidian-mirror writes the day files with no frontmatter and no links, and
+# the repo note's dataviewjs lists are render-time queries that never reach
+# Obsidian's link index. Without these wikilinks every raw day file is an
+# orphan -- all ten in the live vault were.
+STMP="$(mktemp -d)"
+mkdir -p "$STMP/_mem-log/workspace--repo"
+: > "$STMP/_mem-log/workspace--repo/2026-08-25.md"
+: > "$STMP/_mem-log/workspace--repo/2026-08-26.md"
+out="$(vc "
+print(m.source_links('workspace--repo', '$STMP'))
+print('EMPTY:', m.source_links('workspace--absent', '$STMP'))
+")"
+check "raw day files get a real wikilink" "[[_mem-log/workspace--repo/2026-08-26|" "$out"
+# Vault-root-relative, not `../../../`: a repo note sits three levels down
+# under one tree and four under another, so a fixed depth is broken for one.
+if [[ "$out" == *"../"* ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: source links are vault-root-relative"
+else
+  PASS=$((PASS + 1)); echo "  PASS: source links are vault-root-relative"
+fi
+check "newest day first" "2026-08-26|2026-08-26 ham log]]', '- [[_mem-log/workspace--repo/2026-08-25" "$out"
+check "a project with no log dir yields nothing" "EMPTY: []" "$out"
+
+# The outcome, not the helper: deleting the call that writes the section left
+# the source_links tests above completely green.
+out="$(vc "
+note = '''---
+mem_lite_project: workspace--repo
+last_compiled:
+---
+
+## Mimari Ozet
+<!-- agent-card:start -->
+- eski
+<!-- agent-card:end -->
+
+## Son Kararlar
+- eski
+
+## Acik Sorular
+- eski
+'''
+parsed = {'arch': ['- yeni'], 'decisions': ['- karar'], 'questions': ['- soru']}
+print(m.apply_compiled(note, parsed, 'workspace--repo', '$STMP', '2026-08-26'))
+")"
+check "the compiled note carries a Kaynaklar section" "## Kaynaklar" "$out"
+check "and the link lands in it" "[[_mem-log/workspace--repo/2026-08-26|" "$out"
+check "the compile is still stamped" "last_compiled: 2026-08-26" "$out"
+rm -rf "$STMP"
+
 ITMP="$(mktemp -d)"
 mkdir -p "$ITMP/04- Templates"
 printf -- '---\nmem_lite_project: workspace--{{REPO}}\nlast_compiled:\n---\n' \

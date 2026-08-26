@@ -31,7 +31,7 @@ Search the vault for query terms.
 - `case_sensitive` (bool, default False): Case-sensitive matching
 - `frontmatter` (dict, optional): Only search notes whose frontmatter carries these
   key/value pairs, e.g. `{"mem_lite_project": "workspace--myrepo"}` to land on a
-  repo's compiled note directly — the same key `compile-nudge.py` matches on.
+  repo's compiled note directly — the same key `vault-compile.py` matches on.
 
 **Returns:** `{query, vault, total_matches, returned, results: [{path, score, title, snippet, links}]}`
 

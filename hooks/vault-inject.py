@@ -3,8 +3,8 @@
 vault-inject hook (SessionStart).
 
 The bridge's write path already works: every mem_save lands in the vault
-(obsidian-mirror) and compile-nudge asks for a synthesis pass once enough
-has piled up. What was missing is the other direction -- nothing ever read
+(obsidian-mirror) and a daily timer compiles what has piled up into the
+repo's note (vault-compile). What was missing is the other direction -- nothing ever read
 those notes back. A vault that is only written to costs effort and returns
 nothing: the agent re-derives a repo's architecture from source every
 session while a compiled note describing it sits on disk unread.
@@ -12,7 +12,7 @@ session while a compiled note describing it sits on disk unread.
 This hook closes that loop. At session start it injects two bounded slices:
 
   1. This repo's compiled note (matched on `mem_lite_project:`, the same key
-     compile-nudge and mem-lite use).
+     vault-compile and mem-lite use).
   2. The user's profile note, if one opts in with `agent_profile: true`.
 
 Bounded is the whole design. Injection is ambient cost -- it rides in every

@@ -59,6 +59,12 @@ MAX_NARRATIVE_CHARS = 700
 
 CARD_HEADING = "## Mimari Özet"
 SECTIONS = ("## Son Kararlar", "## Açık Sorular")
+SOURCES_HEADING = "## Kaynaklar"
+
+# Where obsidian-mirror drops the raw per-day records, relative to the vault
+# root. The template already names this folder; the compiler now has to agree
+# with it, because it is the only thing that gives those files a real link.
+MEM_LOG_DIR = "_mem-log"
 
 PROFILE_MARKER = "agent_profile: true"
 AUTO_HEADING = "## Otomatik Yakalananlar"
@@ -592,6 +598,50 @@ def unified_diff(before, after, name):
         fromfile=f"a/{name}", tofile=f"b/{name}", n=1))
 
 
+def source_links(project, vault_root):
+    """`[[...]]` links to the raw day files this project's note is built from.
+
+    The vault contract asks for these by name: obsidian-mirror writes
+    `_mem-log/<project>/<date>.md` with no frontmatter and no links, and the
+    dataviewjs lists in a repo note are render-time queries that never enter
+    Obsidian's link index -- so without a real wikilink somewhere, every day
+    file is an orphan. All ten of them were.
+
+    The links are vault-root-relative rather than the `../../../` the template
+    shows. Depth is not a constant: a repo note sits three levels down under
+    `03- Personal Projects/` but four under `02- Kuartis/03- Dearsan/Kida/`,
+    so a fixed number of `../` is right for one tree and broken for the other.
+    A bare `[[2026-08-26]]` is not an option either -- day files share their
+    basename across projects, so it would resolve to whichever one Obsidian
+    happened to pick.
+    """
+    log_dir = os.path.join(vault_root, MEM_LOG_DIR, project)
+    if not os.path.isdir(log_dir):
+        return []
+    days = sorted(
+        (os.path.splitext(n)[0] for n in os.listdir(log_dir) if n.endswith(".md")),
+        reverse=True,
+    )
+    return [f"- [[{MEM_LOG_DIR}/{project}/{d}|{d} ham log]]" for d in days]
+
+
+def apply_compiled(current, parsed, project, vault_root, day):
+    """Fold one model result into the note text.
+
+    Extracted from compile_note so the outcome is testable: a test that only
+    exercised source_links() stayed green when the call that writes the
+    section was deleted outright, which is the same shape of miss as testing
+    an off-switch's mechanism instead of whether it switched anything off.
+    """
+    updated = replace_card(current, parsed["arch"])
+    updated = replace_section(updated, SECTIONS[0], parsed["decisions"])
+    updated = replace_section(updated, SECTIONS[1], parsed["questions"])
+    links = source_links(project, vault_root)
+    if links:
+        updated = replace_section(updated, SOURCES_HEADING, links)
+    return stamp_compiled(updated, day)
+
+
 def compile_note(path, project, args, vault_root):
     rel = os.path.relpath(path, vault_root)
     with open(path, "r", encoding="utf-8") as f:
@@ -628,10 +678,8 @@ def compile_note(path, project, args, vault_root):
             log((raw or "")[:1500])
         return "invalid"
 
-    updated = replace_card(current, parsed["arch"])
-    updated = replace_section(updated, SECTIONS[0], parsed["decisions"])
-    updated = replace_section(updated, SECTIONS[1], parsed["questions"])
-    updated = stamp_compiled(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    updated = apply_compiled(current, parsed, project, vault_root, day)
 
     if updated == current:
         log(f"  · {project}: değişiklik yok")
