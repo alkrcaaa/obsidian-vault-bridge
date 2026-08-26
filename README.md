@@ -7,6 +7,9 @@ personal note-taking workflow choice, not core to the agent-orchestration kit.
 Everything here is **opt-in** and **fail-open**: unset the relevant env var and the
 piece is a silent no-op.
 
+Design decisions behind these pieces — and the measurements that settled them —
+live in [DECISIONS.md](DECISIONS.md). Read it before changing a hook's contract.
+
 ## Pieces
 
 - `hooks/obsidian-mirror.py` — PostToolUse hook on `mcp__mem-lite__mem_save`. Mirrors

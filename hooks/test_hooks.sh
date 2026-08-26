@@ -494,6 +494,118 @@ out="$(echo '{"transcript_path":"'"$CTRANSCRIPT"'","session_id":"c1"}' \
 if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
 else fail "no model endpoint is a silent no-op" "$out"; fi
 
+# --- vault-compile ------------------------------------------------------------
+echo
+echo "vault-compile"
+
+TOOLS_DIR="$(cd "$HOOKS_DIR/../tools" && pwd)"
+vc() { python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('vc', '$TOOLS_DIR/vault-compile.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+$1
+"; }
+
+NOTE_BODY='---
+repo_path: /x/repo
+mem_lite_project: workspace--repo
+last_compiled:
+---
+
+# repo — Coding Notlari
+
+## Mimari Ozet
+- eski mimari
+
+## Elle Yazilmis Bolum
+- INSAN YAZDI bu satir kalmali
+
+## Son Kararlar
+- eski karar
+### alt baslik korunmali
+
+## Acik Sorular
+- eski soru'
+
+# The compiler owns three headings, not the file: a section a human added and a
+# `###` nested under a managed one both have to survive a rewrite.
+out="$(vc "
+import sys
+text = sys.stdin.read()
+text = m.replace_section(text, '## Son Kararlar', ['- yeni karar'])
+text = m.replace_section(text, '## Acik Sorular', ['- yeni soru'])
+print(text)
+" <<<"$NOTE_BODY")"
+check "a human-written section survives a rewrite" "INSAN YAZDI bu satir kalmali" "$out"
+check "a nested ### under a managed section survives" "alt baslik korunmali" "$out"
+check_absent "a replaced bullet is gone" "eski karar" "$out"
+
+# kida_azn carries one project key across seven per-component notes. Compiling
+# all of them would write the whole repo's material into each, flattening seven
+# hand-written notes into seven copies of one summary.
+out="$(vc "
+notes = [('/v/Code/repo/comp_a.md', '', 'workspace--repo'),
+         ('/v/Code/repo.md', '', 'workspace--repo'),
+         ('/v/Code/repo/comp_b.md', '', 'workspace--repo'),
+         ('/v/Code/other.md', '', 'workspace--other')]
+print([n[0] for n in m.preferred_note(notes)])
+")"
+check "one note per project key" "'/v/Code/other.md', '/v/Code/repo.md'" "$out"
+check_absent "sibling component notes are not compiled" "comp_a" "$out"
+
+# Output that is prose, or missing a marker, must leave the note untouched: a
+# bad write into a note the user reads costs more than no write at all.
+out="$(vc "print(m.parse_sections('duz metin, hic isaret yok')[1])")"
+check "prose with no markers is refused" "missing-arch" "$out"
+out="$(vc "print(m.parse_sections('<<<MIMARI>>>\n- a\n<<<KARARLAR>>>\n- b')[1])")"
+check "a dropped marker is refused" "missing-questions" "$out"
+out="$(vc "print(m.parse_sections('<<<MIMARI>>>\n<<<KARARLAR>>>\n- b\n<<<SORULAR>>>\n- c')[1])")"
+check "an empty section is refused" "empty-arch" "$out"
+out="$(vc "print(m.parse_sections('<<<SORULAR>>>\n- c\n<<<MIMARI>>>\n- a\n<<<KARARLAR>>>\n- b')[1])")"
+check "markers in the wrong order are refused" "markers-out-of-order" "$out"
+# A one-letter bullet is not a bullet: the length floor is what stops a model
+# that answers with a stub list from overwriting a real section.
+out="$(vc "print(m.parse_sections('<<<MIMARI>>>\n- a\n<<<KARARLAR>>>\n- b\n<<<SORULAR>>>\n- c')[1])")"
+check "stub bullets do not count as content" "empty-arch" "$out"
+out="$(vc "print(m.parse_sections('<<<MIMARI>>>\n- alfa\n<<<KARARLAR>>>\n- beta\n<<<SORULAR>>>\n- gama')[0])")"
+check "well-formed output parses into three lists" "'arch': ['- alfa']" "$out"
+
+out="$(vc "
+import sys
+print(m.stamp_compiled(m.replace_card(sys.stdin.read(), ['- yeni mimari']), '2026-01-02'))
+" <<<"$NOTE_BODY")"
+check "an empty last_compiled is filled in" "last_compiled: 2026-01-02" "$out"
+check "an unmarked heading gains card markers" "agent-card:start" "$out"
+if [[ "$(grep -c 'agent-card:start' <<<"$out")" == "1" ]]; then
+  pass "card markers are not duplicated"
+else fail "card markers are not duplicated" "$(grep -c 'agent-card:start' <<<"$out")"; fi
+
+# D6: the child must not inherit the vault it is compiling for, or its own Stop
+# hooks fire on the compile transcript and personal-capture files a pile of repo
+# lessons under Hakkimda.md.
+STUB="$(mktemp -d)"
+cat >"$STUB/claude" <<'STUBEOF'
+#!/bin/sh
+echo "VAULT_DIR=[${VAULT_DIR-unset}] MEM=[${MEM_OBSIDIAN_VAULT-unset}] CWD=$(pwd)"
+STUBEOF
+chmod +x "$STUB/claude"
+out="$(VAULT_DIR="$VAULT" MEM_OBSIDIAN_VAULT="$VAULT" PATH="$STUB:$PATH" vc "
+print(m.run_model('x', 'sonnet', 30)[0])
+")"
+check "the model child gets no VAULT_DIR" "VAULT_DIR=[unset]" "$out"
+check "the model child gets no mirror dir" "MEM=[unset]" "$out"
+check "the model child runs in a scratch dir" "vault-compile-" "$out"
+
+# The vault's git tree carries the user's own uncommitted work, so `git checkout`
+# is not an undo for this tool. Every note is copied aside before it is written.
+BTMP="$(mktemp -d)"; mkdir -p "$BTMP/sub"; echo "orijinal" >"$BTMP/sub/n.md"
+out="$(vc "
+dest = m.backup('$BTMP/sub/n.md', '$BTMP')
+print(dest, open(dest).read().strip())
+")"
+check "a note is backed up before writing" "orijinal" "$out"
+check "backups live in the vault's backup dir" ".vault-compile-backups" "$out"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
