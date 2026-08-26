@@ -119,7 +119,14 @@ def iter_notes(vault_dir):
             if not m:
                 continue
             project = m.group(1).strip().strip("\"'")
-            if project.startswith("{{"):  # the note template itself
+            # An unresolved placeholder anywhere in the key means this is the
+            # template, not a note. The prefix-only test this replaces missed
+            # the template that actually ships -- its key is
+            # `workspace--{{REPO}}`, so it read as a real project and was
+            # iterated on every run. Harmless while it never matched new
+            # observations, but the day it did, the compile would have been
+            # written into the template every note is created from.
+            if "{{" in project:
                 continue
             yield path, head, project
 

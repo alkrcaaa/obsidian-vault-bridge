@@ -670,6 +670,28 @@ print(dest, open(dest).read().strip())
 check "a note is backed up before writing" "orijinal" "$out"
 check "backups live in the vault's backup dir" ".vault-compile-backups" "$out"
 
+# The template every repo note is created from carries a placeholder key. It
+# read as a real project for as long as the guard only tested the prefix --
+# the shipped template is keyed `workspace--{{REPO}}`, which does not start
+# with a brace. It was iterated on every run, and the first time it matched
+# new observations the compile would have landed in the template itself.
+ITMP="$(mktemp -d)"
+mkdir -p "$ITMP/04- Templates"
+printf -- '---\nmem_lite_project: workspace--{{REPO}}\nlast_compiled:\n---\n' \
+  > "$ITMP/04- Templates/CodeRepoTemplate.md"
+printf -- '---\nmem_lite_project: workspace--real\nlast_compiled:\n---\n' \
+  > "$ITMP/real.md"
+out="$(vc "
+print(sorted(p for _, _, p in m.iter_notes('$ITMP')))
+")"
+check "a real note is still picked up" "workspace--real" "$out"
+if [[ "$out" == *"{{REPO}}"* ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the note template is skipped, not compiled"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the note template is skipped, not compiled"
+fi
+rm -rf "$ITMP"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
