@@ -119,17 +119,28 @@ session. Compile is the one place the asymmetry flips.
 
 ## D6. The compiler runs its subprocess with `VAULT_DIR` unset
 
-**Decision.** The `claude -p` child is spawned with `VAULT_DIR` and
-`MEM_OBSIDIAN_VAULT` cleared, and with cwd set to a scratch dir.
+**Decision.** The `claude -p` child is spawned with `VAULT_HOOKS_OFF=1`, cwd in
+a scratch dir, and the vault variables emptied for good measure.
 
 **Because.** Otherwise the child session's own Stop hooks fire on the *compile*
-transcript: `personal-capture` would read a pile of repo lessons as facts about
-the user and write them into `Hakkımda.md`. Clearing the env uses the module's
-existing opt-in switch (every piece is a silent no-op without it) instead of
-inventing a suppression flag that would then need its own tests.
+transcript: `personal-capture` reads a pile of repo lessons as facts about the
+user and writes them into `Hakkımda.md`.
 
-**Don't.** Add a `--no-hooks` / `SKIP_VAULT_HOOKS` style flag. The env switch is
-already the documented contract.
+This decision was first written as "clear `VAULT_DIR`, reuse the module's
+existing opt-in switch, don't invent a suppression flag." That was wrong, and
+the test written for it passed while being wrong — it asserted the variable was
+cleared in the child, which is the mechanism, not the outcome. The outcome was
+that the child resolved the vault anyway: the installer writes the same values
+to `~/.config/dev-agent-kit/vault.env`, and an *absent* `VAULT_DIR` is exactly
+the case that file exists to answer (a hook inherits the agent's env, and the
+agent is started from a shell that never exported it — the failure that kept
+these hooks dead in production for weeks). So "unset" already meant "read the
+file", and the contract had no way at all to say "off". A dedicated switch was
+not bloat; it was the missing half of the contract.
+
+**Don't.** Assert that a disabling mechanism was applied. Assert that the thing
+is disabled — here, that `vault_dir()` returns None in the child's environment,
+with a config file present.
 
 ---
 

@@ -21,7 +21,7 @@ Contract (DECISIONS.md D4-D9):
   source     mem-lite's SQLite, not the mirrored markdown
   model      `claude -p` -- compiling is synthesis, which is the local 27B's
              ceiling and the most expensive place to hit it
-  isolation  the child runs with VAULT_DIR cleared, so the vault's own Stop
+  isolation  the child runs with VAULT_HOOKS_OFF=1, so the vault's own Stop
              hooks no-op on the compile transcript instead of mistaking a pile
              of repo lessons for facts about the user
   ownership  it rewrites three sections and preserves the rest of the file
@@ -351,8 +351,13 @@ def run_model(prompt, model, timeout):
     if not shutil.which("claude"):
         return None, "claude-cli-missing"
     env = dict(os.environ)
+    # Clearing the variables is not enough: the installer also writes them to
+    # ~/.config/dev-agent-kit/vault.env, and an absent VAULT_DIR is precisely
+    # the case that file exists to answer, so the child resolved the vault
+    # anyway. VAULT_HOOKS_OFF is the explicit off the contract was missing.
+    env["VAULT_HOOKS_OFF"] = "1"
     for key in ("VAULT_DIR", "MEM_OBSIDIAN_VAULT"):
-        env.pop(key, None)
+        env[key] = ""
     env["VAULT_COMPILE_CHILD"] = "1"
     cmd = [
         "claude", "-p",

@@ -586,15 +586,37 @@ else fail "card markers are not duplicated" "$(grep -c 'agent-card:start' <<<"$o
 STUB="$(mktemp -d)"
 cat >"$STUB/claude" <<'STUBEOF'
 #!/bin/sh
-echo "VAULT_DIR=[${VAULT_DIR-unset}] MEM=[${MEM_OBSIDIAN_VAULT-unset}] CWD=$(pwd)"
+echo "VAULT_DIR=[${VAULT_DIR-unset}] MEM=[${MEM_OBSIDIAN_VAULT-unset}] OFF=[${VAULT_HOOKS_OFF-unset}] CWD=$(pwd)"
 STUBEOF
 chmod +x "$STUB/claude"
 out="$(VAULT_DIR="$VAULT" MEM_OBSIDIAN_VAULT="$VAULT" PATH="$STUB:$PATH" vc "
 print(m.run_model('x', 'sonnet', 30)[0])
 ")"
-check "the model child gets no VAULT_DIR" "VAULT_DIR=[unset]" "$out"
-check "the model child gets no mirror dir" "MEM=[unset]" "$out"
+check "the model child gets no VAULT_DIR" "VAULT_DIR=[]" "$out"
+check "the model child gets no mirror dir" "MEM=[]" "$out"
+check "the model child is told the vault is off" "OFF=[1]" "$out"
 check "the model child runs in a scratch dir" "vault-compile-" "$out"
+
+# Asserting the variable is cleared proved nothing: the installer writes the
+# same values to ~/.config/dev-agent-kit/vault.env, so the first version of
+# this test passed while the child resolved the vault from the file anyway.
+# The outcome is what has to be pinned, not the mechanism.
+CONF_HOME="$(mktemp -d)"; mkdir -p "$CONF_HOME/.config/dev-agent-kit"
+printf 'VAULT_DIR=%s\n' "$VAULT" >"$CONF_HOME/.config/dev-agent-kit/vault.env"
+out="$(HOME="$CONF_HOME" VAULT_DIR="" VAULT_HOOKS_OFF=1 python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('vcm', '$HOOKS_DIR/vault_common.py')
+c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
+print('resolved:', c.vault_dir())
+")"
+check "VAULT_HOOKS_OFF beats the config file" "resolved: None" "$out"
+out="$(HOME="$CONF_HOME" env -u VAULT_DIR python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('vcm', '$HOOKS_DIR/vault_common.py')
+c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
+print('resolved:', c.vault_dir())
+")"
+check "an absent VAULT_DIR still falls back to the config file" "resolved: $VAULT" "$out"
 
 # The vault's git tree carries the user's own uncommitted work, so `git checkout`
 # is not an undo for this tool. Every note is copied aside before it is written.

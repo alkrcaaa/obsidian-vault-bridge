@@ -37,7 +37,20 @@ VAULT_CONF = os.path.expanduser("~/.config/dev-agent-kit/vault.env")
 
 
 def env_or_conf(key):
-    """Env first (so a caller can override), then the installer's file."""
+    """Env first (so a caller can override), then the installer's file.
+
+    `VAULT_HOOKS_OFF` turns every piece of this module off for a process and
+    everything it spawns. Clearing VAULT_DIR is not enough and cannot be: an
+    absent VAULT_DIR is exactly the case the config file exists to answer (a
+    hook inherits the agent's env, and the agent was started from a shell that
+    never exported it -- the failure that kept these hooks dead in production).
+    So "unset" already means "look in the file", and the contract had no way to
+    say "off". vault-compile needs one, because its `claude -p` child would
+    otherwise run the vault live on the compile transcript and let
+    personal-capture file a pile of repo lessons under the user's profile note.
+    """
+    if os.environ.get("VAULT_HOOKS_OFF", "").strip():
+        return None
     return os.environ.get(key) or _conf_value(key)
 
 
