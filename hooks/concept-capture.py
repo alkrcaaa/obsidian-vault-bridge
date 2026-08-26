@@ -126,7 +126,9 @@ satır bir BİLGİ cümlesi olmalı, konuşmanın parçası değil.
 MEVCUT NOT BAŞLIKLARI:
 {titles}
 Açıklanan kavram bu başlıklardan birinin kapsamına giriyorsa, "konu" alanına \
-o başlığı HARFİ HARFİNE yaz. Yeni bir başlık uydurma.
+o başlığı HARFİ HARFİNE yaz — aynı konuyu ikinci bir yazımla açma. \
+Hiçbiri kapsamıyorsa yeni ve kısa bir başlık yaz. Listede yakın duran bir \
+başlığa ZORLAMA: alakasız bir nota yazmak, yeni not açmaktan daha kötüdür.
 
 Çıktı: SADECE tek bir JSON nesnesi, başka hiçbir şey yok:
 {{"konu": "<kavram başlığı>", "satirlar": ["<metinden alınmış cümle>", ...]}}

@@ -461,6 +461,14 @@ check "an existing title is reused, not respelled" "Kubernetes Scheduling.md" "$
 out="$(cc "print(m._titles('$WIKI'))")"
 check_absent "the folder note is not offered as a subject" "'08- Wiki'" "$out"
 
+# A live run filed a Kubernetes explanation under an unrelated existing note:
+# "reuse a title" had been written as an unconditional ban on inventing one,
+# which a small model reads as "you must pick from the list". The branch for
+# "nothing here fits" is what stops that, so it is pinned here.
+out="$(cc "print(m.PROMPT)")"
+check "the model may open a new note when nothing fits" "kapsamıyorsa" "$out"
+check_absent "reusing a title is never an unconditional ban" "Yeni bir başlık uydurma." "$out"
+
 # A note owned by another write path must survive a name collision.
 cc "print(m._append('$WIKI/repo.md', 'repo', ['Tamamen yeni bir cumle burada.']))" >/dev/null
 check_absent "never writes into a repo note" "Tamamen yeni" "$(cat "$WIKI/repo.md")"
