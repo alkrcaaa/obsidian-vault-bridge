@@ -41,6 +41,27 @@ piece is a silent no-op.
   every later session, so an unsupervised write there would amplify a bad
   inference indefinitely. The model call runs detached — a Stop hook otherwise
   holds up the end of the turn. Opt-in via `VAULT_DIR` + `QWEN_BASE_URL`.
+- `hooks/concept-capture.py` — Stop hook, the write half for *concepts*. The repo
+  path learns about code and the profile path learns about the user; neither
+  catches a concept explained at length in the middle of ordinary work, which
+  lives in the transcript and dies with it. Two measurements set its shape.
+  There is no "teaching session" to detect — over 90 days, 4 of 69 sessions
+  carried more learning signal than work signal, and the session where
+  Kubernetes actually got taught scored 4 learning cues against 38 work ones —
+  so it classifies content, not sessions. And no cheap structural trigger
+  exists: a long assistant turn that calls no tool is present in 85% of
+  sessions, because that is also how an agent reports finished work. So a local
+  model reads the session's prose turns and **extracts** the passages that
+  explain something repo-independent. It does not write the article: the
+  explanation was already written by the strong model the user was talking to,
+  and a 27B asked to synthesise a concept is at its ceiling — worst exactly in
+  a note read in order to learn. Output lands under `VAULT_WIKI_DIR`
+  (default `08- Wiki`) in a note stamped `status: draft` / `auto_compiled:
+  true`, in its own dated section; promotion to a real article stays a human or
+  strong-model decision. The model names the note, so the name is treated as
+  untrusted: path separators are refused, existing titles are offered back so it
+  reuses one, and a note carrying `mem_lite_project:` or `agent_profile: true`
+  is never written to. Opt-in via `VAULT_DIR` + `QWEN_BASE_URL`.
 - `hooks/vault_common.py` — the project-key and note lookup both hooks share. A key
   resolved differently in one hook than the other fails silently (the note is simply
   never found), so it exists once.
@@ -80,6 +101,11 @@ read from `~/.config/dev-agent-kit/vault.env` (`KEY=value` per line), written by
   mirror writes, the other is what gets searched/read back. When it resolves to
   nothing, `vault-inject` records a `skip`/`no-vault-dir` metric once per session
   so `hook-stats.sh` can tell "off" apart from "broken".
-- `QWEN_BASE_URL` — OpenAI-compatible endpoint for `personal-capture.py`, e.g. a
-  local vLLM at `http://host:8002/v1`. Unset means that hook is off.
-  `PERSONAL_CAPTURE_MODEL` overrides the model id.
+- `QWEN_BASE_URL` — OpenAI-compatible endpoint for `personal-capture.py` and
+  `concept-capture.py`, e.g. a local vLLM at `http://host:8002/v1`. Unset means
+  both hooks are off. `PERSONAL_CAPTURE_MODEL` overrides the model id;
+  `CONCEPT_CAPTURE_MODEL` overrides it for concept capture alone.
+- `VAULT_WIKI_DIR` — folder `concept-capture.py` files concept notes in,
+  relative to `VAULT_DIR` (or absolute). Defaults to `08- Wiki`. It is the only
+  place that hook may write, so a folder that does not exist switches it off
+  rather than creating one.

@@ -156,6 +156,41 @@ def record_metric(hook, action, cwd, detail=""):
             return
 
 
+def stem_words(text):
+    """Word stems, crudely: the first four characters of each word.
+
+    Whole-word comparison misses the case it exists for. Turkish inflects by
+    suffix, so the same fact restated reads as "repo" one day and
+    "repolardan" the next, and an exact-word overlap scores those as
+    unrelated -- the duplicate then gets written every session.
+    """
+    return {w[:4] for w in re.findall(r"\w+", text.lower()) if len(w) > 2}
+
+
+def is_new_line(candidate, existing_lines, threshold=0.6):
+    """Is this line saying something the note does not already say?
+
+    Exact-match dedup would let the same point accumulate in five phrasings,
+    which is how a note turns into noise nobody reads. Both unsupervised
+    writers (personal-capture, concept-capture) append to a note they will
+    append to again next session, so both need this and both need the same
+    answer -- two copies would drift and one of them would start duplicating.
+    """
+    cw = stem_words(candidate)
+    # Guard on the raw sentence, not on stems: a short but real line
+    # ("Ankara'da yaşıyor") has few stems, and rejecting it here would look
+    # like dedup.
+    if len(re.findall(r"\w+", candidate)) < 3 or not cw:
+        return False
+    for line in existing_lines:
+        lw = stem_words(line)
+        if not lw:
+            continue
+        if len(cw & lw) / len(cw) > threshold:
+            return False
+    return True
+
+
 def read_text(path, limit=60000):
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:

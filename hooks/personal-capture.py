@@ -48,6 +48,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from vault_common import (
         env_or_conf, find_note, read_text, record_metric,
+        # Shared with concept-capture: both append to a note they will append
+        # to again next session, so "does the note already say this" has to be
+        # answered the same way in both or one of them starts duplicating.
+        is_new_line as _is_new,
         vault_dir as resolve_vault,
     )
 except Exception:
@@ -196,37 +200,6 @@ def _ask_model(base_url, messages):
     # otherwise pad the profile with five rewordings of one fact per session,
     # and a profile nobody can read is the same as no profile.
     return [f.strip() for f in facts if isinstance(f, str) and f.strip()][:MAX_FACTS]
-
-
-def _words(text):
-    """Word stems, crudely: the first four characters of each word.
-
-    Whole-word comparison misses the case it exists for. Turkish inflects by
-    suffix, so the same fact restated reads as "repo" one day and
-    "repolardan" the next, and an exact-word overlap scores those as
-    unrelated -- the duplicate then gets written every session.
-    """
-    return {w[:4] for w in re.findall(r"\w+", text.lower()) if len(w) > 2}
-
-
-def _is_new(fact, existing_lines):
-    """Skip anything the note already says, however it is worded.
-
-    Exact-match dedup would let the same fact accumulate in five phrasings,
-    which is how a profile turns into noise nobody reads.
-    """
-    fw = _words(fact)
-    # Guard on the raw sentence, not on stems: a short but real fact ("Ankara'da
-    # yaşıyor") has few stems, and rejecting it here would look like dedup.
-    if len(re.findall(r"\w+", fact)) < 3 or not fw:
-        return False
-    for line in existing_lines:
-        lw = _words(line)
-        if not lw:
-            continue
-        if len(fw & lw) / len(fw) > 0.6:
-            return False
-    return True
 
 
 def _append(note_path, facts):

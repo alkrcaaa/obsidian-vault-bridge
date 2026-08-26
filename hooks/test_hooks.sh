@@ -27,7 +27,8 @@ REPO="$(mktemp -d)"
 # vault-inject "sessions" on this machine were test runs. That is telemetry
 # lying about production, and it lied to the one question the metrics exist
 # to answer -- what does this hook actually cost in real sessions.
-export HOME="$(mktemp -d)"
+HOME="$(mktemp -d)"
+export HOME
 trap 'rm -rf "$VAULT" "$REPO" "$HOME"' EXIT
 
 git -C "$REPO" init -q 2>/dev/null
@@ -374,18 +375,116 @@ day_file="$MIRROR/$PROJECT/$(date +%Y-%m-%d).md"
 mirror '{"content":[{"text":"'"$SAVED"'"}]}' >/dev/null
 check "Claude's response shape is mirrored" "#999" "$(cat "$day_file" 2>/dev/null)"
 
-rm -rf "$MIRROR"/*
+rm -rf "${MIRROR:?}"/*
 mirror '{"llmContent":[{"text":"'"$SAVED"'"}]}' >/dev/null
 check "Qwen's response shape is mirrored" "#999" "$(cat "$day_file" 2>/dev/null)"
 
-rm -rf "$MIRROR"/*
+rm -rf "${MIRROR:?}"/*
 mirror '{"llmContent":"'"$SAVED"'"}' >/dev/null
 check "a bare-string parts field is mirrored" "#999" "$(cat "$day_file" 2>/dev/null)"
 
-rm -rf "$MIRROR"/*
+rm -rf "${MIRROR:?}"/*
 mirror '{"llmContent":[{"text":"Skipped as a duplicate"}]}' >/dev/null
 if [[ ! -e "$day_file" ]]; then pass "an unparsable response writes nothing"
 else fail "an unparsable response writes nothing" "$(cat "$day_file")"; fi
+
+# --- concept-capture: an unsupervised writer that picks its own filename ----
+echo
+echo "concept-capture"
+
+cc() { python3 -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('cc', '$HOOKS_DIR/concept-capture.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+$1
+"; }
+
+WIKI="$VAULT/08- Wiki"
+mkdir -p "$WIKI"
+printf -- '---\ntype: wiki\n---\n\n# Kubernetes Scheduling\n\nEski satır.\n' \
+  >"$WIKI/Kubernetes Scheduling.md"
+printf -- '---\nmem_lite_project: %s\n---\n\n# repo\n' "$PROJECT" >"$WIKI/repo.md"
+
+# The trigger has to classify content, not the session: an explanation and a
+# work report look identical structurally, and 85% of sessions contain the
+# structural signal. All this stage may do is hand the model prose the
+# assistant wrote to the user, with the work and the secrets removed.
+CTRANSCRIPT="$VAULT/concept-transcript.jsonl"
+LONG_TEACH="$(python3 -c "print('scheduler bir podu nodea yerlestirir. ' * 60)")"
+LONG_TOOL="$(python3 -c "print('bu turda arac cagirdim ve dosyayi okudum. ' * 60)")"
+LONG_SECRET="$(python3 -c "print('baglanti icin api_key=hunter2 kullanilir. ' * 60)")"
+python3 - "$CTRANSCRIPT" "$LONG_TEACH" "$LONG_TOOL" "$LONG_SECRET" <<'EOF'
+import json, sys
+path, teach, tool, secret = sys.argv[1:5]
+recs = [
+    {"type": "assistant", "message": {"role": "assistant",
+     "content": [{"type": "text", "text": teach + "\n```\nKOD-BLOGU\n```\n"}]}},
+    {"type": "assistant", "message": {"role": "assistant",
+     "content": [{"type": "text", "text": tool}, {"type": "tool_use", "id": "1"}]}},
+    {"type": "assistant", "message": {"role": "assistant",
+     "content": [{"type": "text", "text": "kisa cevap"}]}},
+    {"type": "assistant", "message": {"role": "assistant",
+     "content": [{"type": "text", "text": secret}]}},
+    {"type": "user", "message": {"role": "user", "content": "kullanicinin sorusu"}},
+]
+with open(path, "w", encoding="utf-8") as f:
+    for r in recs:
+        f.write(json.dumps(r) + "\n")
+EOF
+
+out="$(cc "print(m._explanations('$CTRANSCRIPT'))")"
+check "keeps a long prose-only explanation" "yerlestirir" "$out"
+check_absent "drops turns that called a tool" "arac cagirdim" "$out"
+check_absent "drops turns too short to be an explanation" "kisa cevap" "$out"
+check_absent "code fences are stripped, not sent" "KOD-BLOGU" "$out"
+check_absent "credentials never leave the machine" "hunter2" "$out"
+check_absent "never sends the user's own words" "kullanicinin sorusu" "$out"
+
+QC="$VAULT/concept-qwen.jsonl"
+python3 - "$QC" "$LONG_TEACH" <<'EOF'
+import json, sys
+path, teach = sys.argv[1:3]
+with open(path, "w", encoding="utf-8") as f:
+    f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+        "parts": [{"text": teach}]}}) + "\n")
+    f.write(json.dumps({"type": "assistant", "message": {"role": "assistant",
+        "parts": [{"text": teach}, {"functionCall": {"name": "read_file"}}]}}) + "\n")
+EOF
+out="$(cc "print(len(m._explanations('$QC')))")"
+check "reads Qwen's parts shape, and its tool turns" "1" "$out"
+
+# The filename comes out of a model, so it is untrusted input.
+out="$(cc "print(m.note_path('$WIKI', '../../Code/repo'))")"
+check "a traversing topic is refused" "None" "$out"
+out="$(cc "print(m.note_path('$WIKI', 'kubernetes scheduling'))")"
+check "an existing title is reused, not respelled" "Kubernetes Scheduling.md" "$out"
+out="$(cc "print(m._titles('$WIKI'))")"
+check_absent "the folder note is not offered as a subject" "'08- Wiki'" "$out"
+
+# A note owned by another write path must survive a name collision.
+cc "print(m._append('$WIKI/repo.md', 'repo', ['Tamamen yeni bir cumle burada.']))" >/dev/null
+check_absent "never writes into a repo note" "Tamamen yeni" "$(cat "$WIKI/repo.md")"
+
+NEW="$WIKI/Terraform State.md"
+cc "print(m._append('$NEW', 'Terraform State', ['State kaynak ile gercek dunyayi eslestirir.']))" >/dev/null
+out="$(cat "$NEW" 2>/dev/null)"
+check "a new note is stamped as a draft" "status: draft" "$out"
+check "a new note is marked machine-written" "auto_compiled: true" "$out"
+check "captured lines land in their own dated section" "auto:$(date +%Y-%m-%d)" "$out"
+
+before="$(wc -l <"$NEW")"
+cc "print(m._append('$NEW', 'Terraform State', ['State, kaynagi gercek dunya ile eslestirir.']))" >/dev/null
+if [[ "$(wc -l <"$NEW")" == "$before" ]]; then
+  pass "the same point reworded is not written twice"
+else fail "the same point reworded is not written twice" "$before -> $(wc -l <"$NEW")"; fi
+
+# HOME is redirected so the config fallback cannot supply the real endpoint
+# and ship a transcript to it instead of asserting the gate.
+out="$(echo '{"transcript_path":"'"$CTRANSCRIPT"'","session_id":"c1"}' \
+  | VAULT_DIR="$VAULT" QWEN_BASE_URL="" HOME="$(mktemp -d)" \
+    python3 "$HOOKS_DIR/concept-capture.py" 2>&1)"
+if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
+else fail "no model endpoint is a silent no-op" "$out"; fi
 
 echo
 echo "Results: $PASS passed, $FAIL failed"
