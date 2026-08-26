@@ -382,6 +382,43 @@ check_absent "code fences are stripped, not sent" "KOD-BLOGU" "$out"
 check_absent "credentials never leave the machine" "hunter2" "$out"
 check_absent "never sends the user's own words" "kullanicinin sorusu" "$out"
 
+# The first group is shaped after the lines this hook actually produced on a
+# real session: the prompt forbids every one of them and the model wrote them
+# regardless, so the rule is enforced in code instead -- what *we* did, and
+# what names the repo, never reach a note. (Shaped after, not copied: the
+# sentences a capture hook gets wrong are by definition someone's private
+# notes, and this repo is public.) The second group is the note the model got
+# right; a filter that eats those has replaced one failure with a worse one.
+CCREPO="$VAULT/repos/dev-agent-kit"
+mkdir -p "$CCREPO"
+git -C "$CCREPO" init -q 2>/dev/null
+
+out="$(cc "
+tokens = m.project_tokens('$CCREPO')
+bad = [
+    'Kit, bu kurulumda en çok kaynak tüketen bileşen oldu.',
+    'Aynı ayarı iki serviste de elle güncelliyoruz ve sonucunu hiç ölçmedik.',
+    'Yeni modülü ölçmeden inşa ediyoruz.',
+]
+good = [
+    'Claude Code, başlarken permission kurallarını denetliyor.',
+    'Joker komutun ortasında kullanıldığında o pozisyona sokulan her şeyi onaylıyor.',
+    'Jokerin sondaki kullanımı sorun değildir, bu yüzden diğer kurallar uyarı vermez.',
+]
+for ln in bad:
+    print('DROPPED' if m.is_local_claim(ln, tokens) else 'KEPT-BAD:' + ln)
+for ln in good:
+    print('KEPT' if not m.is_local_claim(ln, tokens) else 'DROPPED-GOOD:' + ln)
+print('TOKENS=' + ','.join(tokens))
+print('CATCHALL=' + repr(m.project_tokens('/tmp')))
+")"
+check_absent "a line naming the repo never reaches a note" "KEPT-BAD:Kit," "$out"
+check_absent "a report of what we did is not a concept" "KEPT-BAD:Tasarrufu" "$out"
+check_absent "a project status report is not a concept" "KEPT-BAD:Temel" "$out"
+check_absent "the filter does not eat a real explanation" "DROPPED-GOOD" "$out"
+check "generic name parts are not treated as the subject" "TOKENS=agent,kit" "$out"
+check "outside a repo the catch-all key is not a filter" "CATCHALL=()" "$out"
+
 QC="$VAULT/concept-qwen.jsonl"
 python3 - "$QC" "$LONG_TEACH" <<'EOF'
 import json, sys

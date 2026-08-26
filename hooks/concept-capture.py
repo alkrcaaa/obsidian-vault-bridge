@@ -28,8 +28,19 @@ this session, by the strong model the user was talking to. A local 27B
 asked to synthesise a concept note is at exactly its ceiling, and a wrong
 sentence is most expensive in a note the user reads *in order to learn*.
 So the task here is extraction -- pull the passages that explain something
-repo-independent, drop the rest -- which is the same shape of task
-personal-capture already does reliably on the user's own prose.
+repo-independent, drop the rest.
+
+That was first argued to be the same shape of task personal-capture already
+does reliably, and production falsified it. personal-capture filters on "is
+this about the user", which is visible in the text. This one filters on
+"would this still be true without this repo", which requires modelling a
+context that is not in the text at all -- judgement, not extraction, and
+above the ceiling. On the second note it ever wrote, every line was this
+project's status report, generified into something that reads like a general
+principle and no longer carries the numbers that made it a finding. The
+prompt forbids all five explicitly; the model agreed and did it anyway. What
+follows from that is WE_DID / project_tokens below: where a rule can be
+checked mechanically, it is not left to the model.
 
 The safety story is personal-capture's, one step stricter because this one
 chooses its own filename:
@@ -63,8 +74,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from vault_common import (
-        env_or_conf, frontmatter_field, is_new_line, read_text, record_metric,
-        vault_dir as resolve_vault,
+        CATCHALL_PROJECT, env_or_conf, frontmatter_field, infer_project,
+        is_new_line, read_text, record_metric, vault_dir as resolve_vault,
     )
 except Exception:
     sys.exit(0)
@@ -92,6 +103,58 @@ SECRET_MARKERS = re.compile(
 # bulkiest: stripping it keeps the prompt inside the window and keeps the
 # note from filling up with one project's function names.
 FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
+
+# The half of the rule the model cannot hold. The prompt already forbids
+# repo-specific findings and status reports, at length -- and on a real
+# session the model returned five lines that were nothing else: "Kit ... en
+# buyuk tuketicisi oldu", "iki haftadir olcmeden insa ediyoruz". Deciding
+# "would this sentence still be true without this repo" is counterfactual
+# judgement, not extraction, and that sits above a 27B's ceiling, so the
+# mechanically checkable part of it is taken away from the model: a sentence
+# about what *we* did is a work report by construction, and a sentence naming
+# the repo is repo-specific by construction. Neither catches a local claim
+# that names nothing and no one -- "ikinci asama fiilen durdu" is this
+# installation's status with nothing in it left to match on -- so this is a
+# floor, not a fix: what escapes it is what the measurement has to judge.
+WE_DID = re.compile(
+    r"\w+(?:[iıuü]yoruz|acağız|eceğiz|mışız|mişiz)\b"
+    r"|\w+(?:ma|me)?[dt][iıuü]k\b(?=\s*[,.;:]|\s*$)",
+    re.IGNORECASE,
+)
+
+# Tokens too generic to mark a sentence as being about one project: dropping
+# them keeps the repo-name rule from eating every line in a repo called
+# "web-api".
+GENERIC_TOKENS = frozenset((
+    "app", "api", "cli", "code", "core", "data", "dev", "infra", "lib",
+    "main", "new", "node", "server", "src", "test", "tests", "tool", "tools",
+    "ui", "web",
+))
+
+
+def project_tokens(cwd):
+    """Words whose presence makes a line about this repo, not about a concept.
+
+    Outside a repo every session shares one catch-all key, which is a label
+    and not a subject -- filtering on it would drop lines for containing an
+    ordinary word.
+    """
+    project = infer_project(cwd)
+    if project == CATCHALL_PROJECT:
+        return ()
+    base = project.rsplit("--", 1)[-1]
+    return tuple(
+        t for t in re.split(r"[^A-Za-z0-9]+", base)
+        if len(t) >= 3 and t.lower() not in GENERIC_TOKENS
+    )
+
+
+def is_local_claim(line, tokens):
+    """True when a line reports this project instead of teaching a concept."""
+    if WE_DID.search(line):
+        return True
+    low = line.lower()
+    return any(re.search(rf"\b{re.escape(t.lower())}\b", low) for t in tokens)
 
 PROMPT = """Aşağıda bir yazılım oturumunda bir asistanın kullanıcıya YAZDIĞI \
 uzun açıklamalar var.
@@ -276,6 +339,8 @@ def _ask_model(base_url, explanations, titles):
     # asks for statements; this makes the one mechanical case of the rule
     # something the model cannot get wrong.
     clean = [ln for ln in clean if not ln.rstrip().endswith("?")]
+    tokens = project_tokens(os.getcwd())
+    clean = [ln for ln in clean if not is_local_claim(ln, tokens)]
     return topic.strip(), clean[:MAX_LINES]
 
 
