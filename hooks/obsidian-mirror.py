@@ -33,7 +33,9 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from vault_common import env_or_conf, record_metric
+    from vault_common import (
+        CATCHALL_PROJECT, env_or_conf, infer_project, record_metric,
+    )
 except Exception:
     sys.exit(0)
 
@@ -96,6 +98,18 @@ def main():
             record_metric("obsidian-mirror", "skip", os.getcwd(), "unparsed")
             sys.exit(0)
         obs_id, obs_type, project = m.group(1), m.group(2), m.group(3)
+
+        # mem-lite names a repo-less session after whatever directory it
+        # started in, so the same class of work lands under a different key
+        # every time -- `home--ali`, `ali--Downloads`, `scratchpad--smoke`.
+        # The vault is what has to stay navigable, so the classification is
+        # redone here and all of it is filed together. A session inside a repo
+        # keeps mem-lite's key untouched: that one is already right, and it is
+        # what the repo's note carries. `cwd` comes off the payload rather
+        # than os.getcwd() because a hook is spawned wherever the agent
+        # happens to be, which is not always the session's directory.
+        if infer_project(data.get("cwd") or os.getcwd()) == CATCHALL_PROJECT:
+            project = CATCHALL_PROJECT
 
         tool_input = data.get("tool_input") or {}
         title = tool_input.get("title") or f"observation #{obs_id}"

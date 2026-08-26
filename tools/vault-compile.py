@@ -42,8 +42,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hooks"))
 
 from vault_common import (  # noqa: E402
-    CARD_END, CARD_START, agent_card, find_note, frontmatter_field,
-    infer_project, record_metric,
+    CARD_END, CARD_START, CATCHALL_PROJECT, agent_card, find_note,
+    frontmatter_field, infer_project, record_metric,
     vault_dir as resolve_vault,
 )
 
@@ -311,19 +311,75 @@ def unowned_projects(owned, minimum=NOTE_THRESHOLD):
             if p and p not in owned and "{{" not in p]
 
 
-def observations(project, since):
+CATCHALL_ID_RE = re.compile(r"^###\s.*\(#(\d+)\)\s*$", re.MULTILINE)
+
+
+def catchall_ids(vault_root):
+    """Observation ids the catch-all note owns, read off its raw day files.
+
+    mem-lite still names a repo-less session after whatever directory it
+    started in, so the DB keeps one key per directory and records nothing
+    about whether a key was ever a repo. The catch-all note therefore cannot
+    find its own material by name, and no property of the key recovers it: a
+    repo and a scratch directory produce the same `parent--base` shape.
+
+    Guessing from volume was tried and is wrong. Folding in every unclaimed
+    key under NOTE_THRESHOLD swallowed four real repos whose notes simply had
+    not been written yet -- lookout, kida_azn, cvml_st_integration,
+    cross_repo_integration -- and a repo's material silently reappearing under
+    a general note is worse than it having no note at all.
+
+    obsidian-mirror already answers the question exactly, at the moment it can
+    still be answered: it runs `git rev-parse` in the session's own directory
+    and files the day under `_mem-log/genel/` when there is no repo. Those
+    files carry the observation id in every entry heading, so the classifica-
+    tion made from live git state is on disk and can just be read back. Only
+    sessions captured since that rule shipped are in there, which is correct:
+    what came before was never classified and cannot be reconstructed now.
+    """
+    log_dir = os.path.join(vault_root, MEM_LOG_DIR, CATCHALL_PROJECT)
+    if not os.path.isdir(log_dir):
+        return []
+    ids = set()
+    for name in sorted(os.listdir(log_dir)):
+        if not name.endswith(".md"):
+            continue
+        try:
+            with open(os.path.join(log_dir, name), "r",
+                      encoding="utf-8", errors="ignore") as f:
+                ids.update(int(m) for m in CATCHALL_ID_RE.findall(f.read()))
+        except OSError:
+            continue
+    return sorted(ids)
+
+
+def observations(project, since, vault_root=None):
     """Live observations for a project, oldest first, within a char budget.
 
     Superseded and compressed rows are skipped: a note compiled from a record
     that mem-lite itself has retired would reintroduce a fact the DB already
     knows is stale.
+
+    The catch-all note is the one project whose material is not stored under
+    its own name -- mem-lite scattered it across a key per directory -- so it
+    selects by the ids catchall_ids() reads off its own raw day files instead.
+    Without a vault_root it has no way to resolve those, and selecting by the
+    name `genel` would quietly compile an empty note; returning nothing says
+    the same thing without writing anything.
     """
+    if project == CATCHALL_PROJECT:
+        ids = catchall_ids(vault_root) if vault_root else []
+        if not ids:
+            return [], 0
+        placeholders = ",".join("?" * len(ids))
+        where, params = f"id IN ({placeholders})", list(ids)
+    else:
+        where, params = "project = ?", [project]
     query = (
         "SELECT created_at, type, title, subtitle, lesson_learned, narrative, "
-        "importance FROM observations WHERE project = ? "
+        f"importance FROM observations WHERE {where} "
         "AND superseded_at IS NULL AND compressed_into IS NULL"
     )
-    params = [project]
     if since is not None:
         query += " AND created_at > ?"
         params.append(since.strftime("%Y-%m-%dT%H:%M:%S"))
@@ -707,7 +763,7 @@ def compile_note(path, project, args, vault_root):
         current = f.read()
 
     since = last_compiled(current)
-    records, total = observations(project, since)
+    records, total = observations(project, since, vault_root)
     if not records:
         log(f"  · {project}: yeni kayıt yok, atlandı")
         return "skip-no-new"
@@ -806,6 +862,10 @@ def main():
             return 0 if not tally.get("error") and not tally.get("invalid") else 2
 
     notes = preferred_note(list(iter_notes(vault_root)))
+    # Every key any note claims, captured before the run is narrowed to one
+    # note: this is what tells the catch-all which keys are strays, and a set
+    # built from the narrowed list would call every other repo a stray.
+    owned = {n[2] for n in notes}
     if not args.all:
         wanted = args.project or infer_project(os.getcwd())
         notes = [n for n in notes if n[2] == wanted]
@@ -827,9 +887,19 @@ def main():
             tally["sources-linked"] = tally.get("sources-linked", 0) + 1
 
     if args.all:
-        for project, count in unowned_projects({n[2] for n in notes}):
+        for project, count in unowned_projects(owned):
             log(f"  ? {project}: {count} kayıt var, bunu sahiplenen not yok — "
                 "`mem_lite_project:` taşıyan bir not aç")
+        # Repo-less material is scattered across keys that are each far under
+        # NOTE_THRESHOLD, so the loop above is silent about every one of them.
+        # Without this, the one note that has to exist for work outside a repo
+        # would be the only note nothing ever asks for.
+        if CATCHALL_PROJECT not in owned:
+            ids = catchall_ids(vault_root)
+            if ids:
+                log(f"  ? {CATCHALL_PROJECT}: repo dışı {len(ids)} kayıt var, "
+                    "bunu sahiplenen not yok — "
+                    f"`mem_lite_project: {CATCHALL_PROJECT}` taşıyan bir not aç")
 
     log("— özet: " + ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
     return 0 if not tally.get("error") and not tally.get("invalid") else 2

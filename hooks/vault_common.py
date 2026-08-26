@@ -24,6 +24,12 @@ import subprocess
 CARD_START = "<!-- agent-card:start -->"
 CARD_END = "<!-- agent-card:end -->"
 
+# The project key for every session that is not inside a git repo -- a general
+# conversation, a session started in a home or scratch directory, anything
+# with no repo to belong to. One key, so one note in the vault can own the
+# whole class; see infer_project() for what splitting it costs.
+CATCHALL_PROJECT = "genel"
+
 # Where the installer records the vault path. Env alone is not a reliable
 # channel for a hook: hooks are spawned by the agent process, which inherits
 # whatever shell launched it. `VAULT_DIR` exported in ~/.zshenv reaches a
@@ -74,12 +80,26 @@ def _conf_value(key):
 
 
 def infer_project(cwd):
-    """Mirror ~/.claude-mem-lite/utils.mjs::inferProject() -- git root first.
+    """This session's project key: the git repo's, or the catch-all.
 
-    Must stay in sync with mem-lite's own inference: this key is how a note
-    in the vault is matched to the repo a session is running in.
+    Inside a repo this mirrors ~/.claude-mem-lite/utils.mjs::inferProject() --
+    git root, then `parent--base`. That key is how a note in the vault is
+    matched to the repo a session is running in, so it has to stay in sync
+    with mem-lite's own inference.
+
+    Outside a repo it deliberately stops mirroring. mem-lite keeps naming
+    those sessions after the directory they happen to start in, which splits
+    one kind of work -- everything that is not a repo -- across an unbounded
+    set of keys: `/home/ali` becomes `home--ali`, `~/Downloads` becomes
+    `ali--Downloads`, a scratchpad becomes `scratchpad--smoke`. Each shard is
+    then too small to ever reach NOTE_THRESHOLD, so none is reported as
+    noteless, none gets a note, and none is ever compiled or injected. The
+    material is on disk and unreachable, which looks exactly like nothing
+    having been captured. One key for all of it gives that work a single note,
+    and every existing lookup keeps working unchanged.
     """
     root = cwd
+    in_repo = False
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -87,8 +107,11 @@ def infer_project(cwd):
         )
         if result.returncode == 0 and result.stdout.strip():
             root = result.stdout.strip()
+            in_repo = True
     except Exception:
         pass
+    if not in_repo:
+        return CATCHALL_PROJECT
     root = root.rstrip("/")
     base = os.path.basename(root)
     parent = os.path.basename(os.path.dirname(root))

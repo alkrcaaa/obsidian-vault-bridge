@@ -724,6 +724,93 @@ else
 fi
 rm -rf "$ITMP"
 
+# --- the catch-all: the work that belongs to no repo ------------------------
+# mem-lite names a repo-less session after whatever directory it started in,
+# so `/home/ali`, `~/Downloads` and a scratch dir each became their own key.
+# Every shard stayed far under the note threshold, so none was ever reported
+# as noteless, none got a note, and none was compiled or injected -- captured
+# and unreachable, which looks exactly like nothing having been captured.
+echo
+echo "catch-all"
+
+CREPO="$(mktemp -d)"; git -C "$CREPO" init -q
+CPLAIN="$(mktemp -d)"
+REPO_KEY="$(basename "$(dirname "$CREPO")")--$(basename "$CREPO")"
+out="$(python3 -c "
+import sys; sys.path.insert(0, '$HOOKS_DIR')
+import vault_common as v
+print('repo=' + v.infer_project('$CREPO'))
+print('plain=' + v.infer_project('$CPLAIN'))
+")"
+check "a repo still keys off its git root" "repo=$REPO_KEY" "$out"
+check "a directory outside any repo collapses to one key" "plain=genel" "$out"
+
+# The classification has to be redone in the hook rather than trusted from
+# mem-lite's key, because mem-lite has no notion of the catch-all at all.
+CMIRROR="$(mktemp -d)"
+cmirror() { # cwd, project-as-mem-lite-named-it
+  echo '{"tool_name":"mcp__mem-lite__mem_save","cwd":"'"$1"'",'\
+'"tool_input":{"title":"t","content":"c"},"tool_response":{"content":[{"text":'\
+'"Saved as observation #777 [bugfix] in project \"'"$2"'\""}]}}' \
+    | MEM_OBSIDIAN_VAULT="$CMIRROR" HOME="$(mktemp -d)" python3 "$HOOKS_DIR/obsidian-mirror.py" 2>&1
+}
+TODAY="$(date +%Y-%m-%d)"
+
+cmirror "$CPLAIN" "home--ali" >/dev/null
+if [[ -f "$CMIRROR/genel/$TODAY.md" ]]; then
+  pass "a repo-less save is filed under the catch-all"
+else fail "a repo-less save is filed under the catch-all" "$(ls -R "$CMIRROR")"; fi
+if [[ ! -d "$CMIRROR/home--ali" ]]; then
+  pass "and mem-lite's directory-shaped key gets no folder of its own"
+else fail "and mem-lite's directory-shaped key gets no folder of its own" "$(ls -R "$CMIRROR")"; fi
+
+rm -rf "${CMIRROR:?}"/*
+cmirror "$CREPO" "workspace--repo" >/dev/null
+if [[ -f "$CMIRROR/workspace--repo/$TODAY.md" ]]; then
+  pass "a save inside a repo keeps mem-lite's key untouched"
+else fail "a save inside a repo keeps mem-lite's key untouched" "$(ls -R "$CMIRROR")"; fi
+
+# Selection by id off the day files, not by name and not by volume. Folding in
+# every unclaimed key under the threshold was tried first and swallowed four
+# real repos whose notes had simply not been written yet.
+CVAULT="$(mktemp -d)"; mkdir -p "$CVAULT/_mem-log/genel"
+printf -- '### 10:00 — [decision] bir (#11)\n\n---\n\n### 10:05 — [bugfix] iki (#22)\n\n---\n' \
+  > "$CVAULT/_mem-log/genel/2026-08-26.md"
+CDB="$(mktemp -d)/mem.db"
+python3 - "$CDB" <<'PYEOF'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("CREATE TABLE observations (id INTEGER, project TEXT, created_at TEXT, "
+            "type TEXT, title TEXT, subtitle TEXT, lesson_learned TEXT, "
+            "narrative TEXT, importance INTEGER, superseded_at TEXT, "
+            "compressed_into TEXT)")
+con.executemany(
+    "INSERT INTO observations VALUES (?,?,?,?,?,NULL,NULL,NULL,1,NULL,NULL)",
+    [(11, "home--ali", "2026-08-26T10:00:00", "decision", "bir"),
+     (22, "ali--Downloads", "2026-08-26T10:05:00", "bugfix", "iki"),
+     (33, "workspace--kucukrepo", "2026-08-26T10:09:00", "feature", "uc")])
+con.commit()
+PYEOF
+out="$(vc "
+m.MEM_DB = '$CDB'
+print('ids=%s' % m.catchall_ids('$CVAULT'))
+recs, total = m.observations('genel', None, '$CVAULT')
+print('total=%d' % total)
+print(' '.join(r['text'] for r in recs))
+")"
+check "the catch-all reads its ids off its own day files" "ids=[11, 22]" "$out"
+check "and pulls exactly those records, whatever mem-lite called them" "total=2" "$out"
+check_absent "a small repo's material is never swallowed into it" "kucukrepo" "$out"
+
+# Selecting by the name `genel` would find nothing and compile the note empty,
+# overwriting a real one with a summary of no records.
+out="$(vc "
+m.MEM_DB = '$CDB'
+print('novault=%s' % (m.observations('genel', None, None),))
+")"
+check "without a vault root the catch-all compiles nothing" "novault=([], 0)" "$out"
+rm -rf "$CREPO" "$CPLAIN" "$CMIRROR" "$CVAULT" "$(dirname "$CDB")"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
