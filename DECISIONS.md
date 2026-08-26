@@ -222,3 +222,34 @@ extraction question, which the records show actually closed.
 
 **Don't.** Judge a compile by whether the new bullets look good. Read the
 removed ones — that is where the loss hides, and a diff shows them for free.
+
+---
+
+## D11. The 27B captures broadly; the strong model decides what is durable
+
+**Decision.** `personal-capture` (local 27B, every session) writes into the
+profile note's own `## Otomatik Yakalananlar` section, which is never injected.
+`vault-compile --profile` (strong model, out-of-band) reads that section and
+rewrites the injected agent card. Recall in the cheap pass, precision in the
+expensive one.
+
+**Because.** The 27B's captures measured ~3/10 durable: alongside real
+preferences it wrote "is currently working on the second-brain project"
+(project state), "has not used Claude or Qwen lately" (true for a week), and
+four rewordings of one fact. Tightening its prompt fights the model's ceiling;
+the same rule as D5 says extraction is its job and judgement is not. Given the
+same ten sentences, the compile pass kept two, dropped both temporal lines,
+merged the duplicates, and generalised "wants a daily cron" into a durable
+preference for automation over manual steps — which is the transformation the
+27B cannot be asked for.
+
+This also answers the cost question the shape invites: the note is 10KB and
+only the card is injected, so captured lines cost nothing until they are
+promoted. Low precision in the auto section is a readability problem, not a
+token problem. The card itself went 1089 -> 1489 chars (~272 -> ~372 tokens)
+for two bullets, and that is the only figure that recurs every session.
+
+**Don't.** Promote captured lines automatically, and don't let the capture hook
+write into the card. The section header states the promise that a machine line
+never reaches the injected card on its own; that promise is what makes running
+a small model broadly safe in the first place.

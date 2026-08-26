@@ -42,7 +42,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hooks"))
 
 from vault_common import (  # noqa: E402
-    CARD_END, CARD_START, frontmatter_field, infer_project, record_metric,
+    CARD_END, CARD_START, agent_card, find_note, frontmatter_field,
+    infer_project, record_metric,
     vault_dir as resolve_vault,
 )
 
@@ -59,6 +60,11 @@ MAX_NARRATIVE_CHARS = 700
 CARD_HEADING = "## Mimari Özet"
 SECTIONS = ("## Son Kararlar", "## Açık Sorular")
 
+PROFILE_MARKER = "agent_profile: true"
+AUTO_HEADING = "## Otomatik Yakalananlar"
+AUTO_STAMP = re.compile(r"<!--\s*auto:(\d{4}-\d{2}-\d{2})\s*-->")
+
+MARK_CARD = "<<<KART>>>"
 MARK_ARCH = "<<<MIMARI>>>"
 MARK_DECISIONS = "<<<KARARLAR>>>"
 MARK_QUESTIONS = "<<<SORULAR>>>"
@@ -69,6 +75,15 @@ SYSTEM_PROMPT = (
     "indirgiyorsun. Yeni bilgi UYDURMUYORSUN: sadece sana verilen kayıtlarda geçen "
     "şeyleri yazıyorsun. Çıktın Türkçe ve madde madde. Asla dosya adı, başlık adı "
     "veya bölüm adı önermiyorsun; sadece istenen üç bölümün içeriğini üretiyorsun."
+)
+
+
+PROFILE_SYSTEM_PROMPT = (
+    "Sen bir kullanıcı profili derleyicisisin. Bir kişi hakkında oturumlarda "
+    "yakalanmış ham cümlelerden, o kişiyle çalışan bir ajanın davranışını "
+    "değiştirecek KALICI talimatları süzüyorsun. Geçici durumları, proje "
+    "bilgisini ve tekrarları eliyorsun. Yeni bilgi UYDURMUYORSUN. Çıktın "
+    "Türkçe ve madde madde."
 )
 
 
@@ -172,9 +187,16 @@ def replace_section(text, heading, bullets):
     return text[:span[0]] + body + text[span[1]:]
 
 
-def replace_card(text, bullets):
-    """Rewrite the agent-card block -- the payload vault-inject injects."""
-    body = CARD_START + "\n" + CARD_HEADING + "\n" + "\n".join(bullets) + "\n" + CARD_END
+def replace_card(text, bullets, heading=CARD_HEADING):
+    """Rewrite the agent-card block -- the payload vault-inject injects.
+
+    `heading` is None for the profile note, whose card holds bullets directly:
+    a repo note's card sits under `## Mimari Özet`, and stamping that heading
+    into the profile would inject the word "architecture" over a description of
+    a person.
+    """
+    inner = ((heading + "\n") if heading else "") + "\n".join(bullets)
+    body = CARD_START + "\n" + inner + "\n" + CARD_END
     if CARD_START in text and CARD_END in text:
         start = text.index(CARD_START)
         end = text.index(CARD_END) + len(CARD_END)
@@ -213,11 +235,21 @@ def backup(path, vault_root):
 
 
 def stamp_compiled(text, day):
+    """Set `last_compiled`, adding the field if the note has none.
+
+    Adding it went in *above* the opening `---`, because the first `---` in a
+    note is the delimiter that opens frontmatter, not a line to insert before.
+    Every repo note already carried the field so the branch never ran until the
+    profile note, which does not: the result was a file whose first line sits
+    outside its own frontmatter, i.e. no valid frontmatter at all.
+    """
     if re.search(r"^last_compiled:.*$", text, re.MULTILINE):
         return re.sub(r"^last_compiled:.*$", f"last_compiled: {day}", text,
                       count=1, flags=re.MULTILINE)
-    return re.sub(r"^---\s*$", f"last_compiled: {day}\n---", text, count=1,
-                  flags=re.MULTILINE)
+    if re.match(r"^---\s*$", text.split("\n", 1)[0]):
+        head, _, rest = text.partition("\n")
+        return f"{head}\nlast_compiled: {day}\n{rest}"
+    return f"---\nlast_compiled: {day}\n---\n\n{text}"
 
 
 def managed_excerpt(text):
@@ -339,7 +371,7 @@ KURALLAR:
 """
 
 
-def run_model(prompt, model, timeout):
+def run_model(prompt, model, timeout, system=SYSTEM_PROMPT):
     """One text-in/text-out turn, isolated from the vault it is compiling for.
 
     VAULT_DIR and MEM_OBSIDIAN_VAULT are cleared rather than suppressed by a new
@@ -364,7 +396,7 @@ def run_model(prompt, model, timeout):
         "--model", model,
         "--strict-mcp-config",
         "--no-session-persistence",
-        "--system-prompt", SYSTEM_PROMPT,
+        "--system-prompt", system,
     ]
     with tempfile.TemporaryDirectory(prefix="vault-compile-") as workdir:
         try:
@@ -411,6 +443,139 @@ def parse_sections(raw):
 
 
 # --------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# the profile note
+
+
+def auto_facts(text, since):
+    """Machine-captured lines from the profile note, newest-first date filter.
+
+    personal-capture writes into its own section and stamps each line, and the
+    section's own heading promises that nothing there reaches the injected card
+    on its own. That promise is what makes a local 27B safe to run broadly: it
+    can over-capture, because a second pass decides what is durable. This is
+    that second pass, so it reads the section rather than replacing it.
+    """
+    if AUTO_HEADING not in text:
+        return []
+    body = text.split(AUTO_HEADING, 1)[1]
+    nxt = re.search(r"^## ", body, re.MULTILINE)
+    if nxt:
+        body = body[:nxt.start()]
+    out = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith("- "):
+            continue
+        stamp = AUTO_STAMP.search(line)
+        if since is not None and stamp and stamp.group(1) <= since.strftime("%Y-%m-%d"):
+            continue
+        out.append(AUTO_STAMP.sub("", line).strip())
+    return out
+
+
+def build_profile_prompt(current_card, facts):
+    material = "\n".join(facts)
+    return f"""Aşağıda bir kullanıcının ajan kartı ve o kullanıcı hakkında oturumlarda otomatik yakalanmış ham cümleler var.
+
+Görevin: KARTI yeniden yazmak. Kart, kullanıcıyla çalışan her ajana her oturumun başında enjekte edilir — yani biyografi değil, ÇALIŞMA TALİMATIDIR.
+
+KARTIN ŞU ANKİ HALİ:
+---
+{current_card}
+---
+
+OTOMATİK YAKALANMIŞ HAM CÜMLELER (hepsi doğru veya kalıcı değil, eleme senin işin):
+---
+{material}
+---
+
+KURALLAR:
+- MEVCUT KART MADDELERİ VARSAYILAN OLARAK KALIR. Ancak ham cümlelerde açıkça çeliştiğine dair kanıt varsa değiştir. "Yer kalmadı" gerekçe değildir.
+- Ham cümlelerden SADECE kalıcı olanları al. Şunları ASLA karta yazma:
+  * geçici durum ("son günlerde X kullanmıyor", "şu an Y projesi üzerinde çalışıyor")
+  * üzerinde çalışılan projenin bilgisi, amacı veya kararları (bunlar repo notlarının işi)
+  * aynı şeyin farklı kelimelerle tekrarı — tek maddede birleştir
+- Bir cümlenin kalıcı mı geçici mi olduğundan emin değilsen ALMA. Kart küçük ve doğru olmalı, geniş ve şüpheli değil.
+- Her madde ajanın davranışını değiştirecek bir şey söylesin: nasıl anlatılmasını istediği, neyi varsayabileceğin, neyi yapmaman gerektiği.
+- En fazla 12 madde. Her madde `- ` ile başlar; bir maddenin devamı girintili satır olarak gelebilir.
+
+ÇIKTI BİÇİMİ — tam olarak bu, başka hiçbir şey yazma:
+{MARK_CARD}
+- ...
+"""
+
+
+def parse_card(raw):
+    """The marked block as lines, or (None, reason).
+
+    Bullets may wrap onto indented continuation lines, so this keeps the block
+    verbatim instead of filtering to lines that start with a dash -- dropping
+    the continuations would silently truncate half the sentences in the card.
+    """
+    if not raw:
+        return None, "empty"
+    idx = raw.find(MARK_CARD)
+    if idx < 0:
+        return None, "missing-card"
+    lines = [ln.rstrip() for ln in raw[idx + len(MARK_CARD):].splitlines()]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not any(ln.strip().startswith("- ") and len(ln.strip()) > 3 for ln in lines):
+        return None, "no-bullets"
+    return lines, None
+
+
+def compile_profile(path, args, vault_root):
+    rel = os.path.relpath(path, vault_root)
+    with open(path, "r", encoding="utf-8") as f:
+        current = f.read()
+
+    since = last_compiled(current)
+    facts = auto_facts(current, since)
+    if not facts:
+        log("  · profil: yeni yakalanmış gerçek yok, atlandı")
+        return "skip-no-new"
+    log(f"  → profil: {len(facts)} yeni yakalanmış cümle — {rel}")
+    if args.no_model:
+        return "planned"
+
+    card = agent_card(current) or ""
+    raw, err = run_model(build_profile_prompt(card, facts), args.model, args.timeout,
+                         system=PROFILE_SYSTEM_PROMPT)
+    if err:
+        log(f"  ! profil: model çağrısı başarısız ({err})")
+        record_metric("vault-compile", "error", vault_root, f"profile:{err}")
+        return "error"
+    lines, why = parse_card(raw)
+    if lines is None:
+        log(f"  ! profil: çıktı doğrulanamadı ({why}) — kart değiştirilmedi")
+        record_metric("vault-compile", "invalid", vault_root, f"profile:{why}")
+        if args.debug:
+            log((raw or "")[:1500])
+        return "invalid"
+
+    updated = replace_card(current, lines, heading=None)
+    updated = stamp_compiled(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    if updated == current:
+        log("  · profil: değişiklik yok")
+        return "unchanged"
+    if not args.apply:
+        print(unified_diff(current, updated, rel))
+        return "dry-run"
+    saved = backup(path, vault_root)
+    if saved is None:
+        record_metric("vault-compile", "error", vault_root, "profile:backup-failed")
+        return "error"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    log(f"  ✓ profil: yazıldı → {rel}")
+    record_metric("vault-compile", "compile", vault_root, f"profile:{len(facts)}fact:{rel}")
+    return "compiled"
 
 
 def unified_diff(before, after, name):
@@ -485,7 +650,10 @@ def compile_note(path, project, args, vault_root):
 
 def main():
     ap = argparse.ArgumentParser(description="Compile mem-lite history into vault notes.")
-    ap.add_argument("--all", action="store_true", help="every note with a mem_lite_project key")
+    ap.add_argument("--all", action="store_true",
+                    help="every note with a mem_lite_project key, plus the profile")
+    ap.add_argument("--profile", action="store_true",
+                    help="only the profile note (agent_profile: true)")
     ap.add_argument("--project", help="one project key (default: infer from cwd)")
     ap.add_argument("--apply", action="store_true", help="write (default: print a diff)")
     ap.add_argument("--min-new", type=int, default=MIN_NEW_DEFAULT,
@@ -507,6 +675,22 @@ def main():
         log(f"mem-lite veritabanı bulunamadı: {MEM_DB}")
         return 1
 
+    tally = {}
+    if args.all or args.profile:
+        # The profile's material is what personal-capture wrote, not mem-lite:
+        # the local 27B captures broadly on purpose, and this pass is the one
+        # that decides which of those lines are durable enough to be injected
+        # into every session. Recall there, precision here.
+        profile_path, _ = find_note(vault_root, PROFILE_MARKER)
+        if profile_path:
+            outcome = compile_profile(profile_path, args, vault_root)
+            tally[outcome] = tally.get(outcome, 0) + 1
+        else:
+            log("`agent_profile: true` taşıyan not yok — profil atlandı")
+        if args.profile:
+            log("— özet: " + ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
+            return 0 if not tally.get("error") and not tally.get("invalid") else 2
+
     notes = preferred_note(list(iter_notes(vault_root)))
     if not args.all:
         wanted = args.project or infer_project(os.getcwd())
@@ -517,7 +701,6 @@ def main():
             return 1
 
     log(f"{len(notes)} not incelenecek ({'YAZIM' if args.apply else 'kuru koşu'}, model={args.model})")
-    tally = {}
     for i, (path, _head, project) in enumerate(notes):
         if args.limit and i >= args.limit:
             break

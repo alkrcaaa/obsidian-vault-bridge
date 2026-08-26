@@ -580,6 +580,48 @@ if [[ "$(grep -c 'agent-card:start' <<<"$out")" == "1" ]]; then
   pass "card markers are not duplicated"
 else fail "card markers are not duplicated" "$(grep -c 'agent-card:start' <<<"$out")"; fi
 
+# The stamp used to go in above the opening `---`, which is the delimiter that
+# opens frontmatter, not a line to insert before. Every repo note already had
+# the field, so the branch first ran on the profile note -- and produced a file
+# whose first line sat outside its own frontmatter.
+out="$(vc "
+print(repr(m.stamp_compiled('---\nagent_profile: true\n---\n\ngovde', '2026-01-02')))
+")"
+check "a note with no last_compiled gets one inside the frontmatter" \
+  "'---\\nlast_compiled: 2026-01-02\\nagent_profile: true\\n---" "$out"
+
+# The profile card holds bullets directly; a repo note's sits under a heading.
+out="$(vc "
+print(m.replace_card('<!-- agent-card:start -->\neski\n<!-- agent-card:end -->', ['- yeni'], heading=None))
+")"
+check_absent "the profile card gets no architecture heading" "Mimari" "$out"
+check "the profile card keeps the new bullets" "- yeni" "$out"
+
+# Machine-captured lines older than the last compile are already in the card.
+AUTO='## Otomatik Yakalananlar
+- eski gercek <!-- auto:2026-01-01 -->
+- yeni gercek <!-- auto:2026-06-01 -->
+
+## Baska Bolum
+- bu bolum profil malzemesi degil'
+out="$(vc "
+import sys, datetime
+text = sys.stdin.read()
+since = datetime.datetime(2026, 3, 1, tzinfo=datetime.timezone.utc)
+print(m.auto_facts(text, since))
+" <<<"$AUTO")"
+check "only facts newer than the last compile are used" "yeni gercek" "$out"
+check_absent "already-compiled facts are not re-sent" "eski gercek" "$out"
+check_absent "the profile pass stops at the next section" "profil malzemesi degil" "$out"
+check_absent "the auto stamp is stripped before the model sees it" "auto:2026-06-01" "$out"
+
+out="$(vc "print(m.parse_card('duz metin')[1])")"
+check "a card with no marker is refused" "missing-card" "$out"
+out="$(vc "print(m.parse_card('<<<KART>>>\nbullet yok, sadece prose')[1])")"
+check "a card with no bullets is refused" "no-bullets" "$out"
+out="$(vc "print(m.parse_card('<<<KART>>>\n- **Bir sey:** aciklama\n  devam satiri')[0])")"
+check "a wrapped bullet keeps its continuation line" "devam satiri" "$out"
+
 # D6: the child must not inherit the vault it is compiling for, or its own Stop
 # hooks fire on the compile transcript and personal-capture files a pile of repo
 # lessons under Hakkimda.md.
