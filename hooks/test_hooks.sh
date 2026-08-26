@@ -680,7 +680,32 @@ print(open('$STMP/note/repo.md').read())
 ")"
 check "links are refreshed without a compile" "[[_mem-log/workspace--repo/2026-08-26|" "$out"
 check_absent "and no compile date is stamped by it" "last_compiled: 2026-08-26" "$out"
-rm -rf "$STMP"
+
+# A repo with no note produces no compile, and a compile that never runs
+# reports nothing -- so it stays noteless and the silence reads as "nothing to
+# do". compile-nudge used to say this; it moved here when that hook went.
+MEMDB="$(mktemp -d)/mem.db"
+python3 - "$MEMDB" <<'PYEOF'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("CREATE TABLE observations (project TEXT, superseded_at TEXT, "
+            "compressed_into TEXT)")
+con.executemany("INSERT INTO observations VALUES (?, NULL, NULL)",
+                [("workspace--noteless",)] * 12
+                + [("workspace--owned",)] * 12
+                + [("workspace--{{REPO}}",)] * 12
+                + [("workspace--barely",)] * 3)
+con.commit()
+PYEOF
+out="$(vc "
+m.MEM_DB = '$MEMDB'
+print(m.unowned_projects({'workspace--owned'}))
+")"
+check "a project with material and no note is named" "workspace--noteless" "$out"
+check_absent "a project that has a note is not" "workspace--owned" "$out"
+check_absent "the template's placeholder key is not reported" "{{REPO}}" "$out"
+check_absent "and neither is a project below the threshold" "workspace--barely" "$out"
+rm -rf "$STMP" "$(dirname "$MEMDB")"
 
 ITMP="$(mktemp -d)"
 mkdir -p "$ITMP/04- Templates"

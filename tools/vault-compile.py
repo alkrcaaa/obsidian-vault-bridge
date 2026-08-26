@@ -61,6 +61,11 @@ CARD_HEADING = "## Mimari Özet"
 SECTIONS = ("## Son Kararlar", "## Açık Sorular")
 SOURCES_HEADING = "## Kaynaklar"
 
+# How much material a project has to accumulate before a missing note is worth
+# reporting. Low enough that a repo does not stay silent for weeks, high enough
+# that a single stray observation does not ask for a note.
+NOTE_THRESHOLD = 10
+
 # Where obsidian-mirror drops the raw per-day records, relative to the vault
 # root. The template already names this folder; the compiler now has to agree
 # with it, because it is the only thing that gives those files a real link.
@@ -278,6 +283,32 @@ def managed_excerpt(text):
 
 # --------------------------------------------------------------------------
 # mem-lite side
+
+
+def unowned_projects(owned, minimum=NOTE_THRESHOLD):
+    """Projects mem-lite has material for that no note claims.
+
+    A repo with no note produces no compile, and a compile that never runs
+    reports nothing -- so the repo stays noteless forever and the silence
+    looks like nothing needing doing. compile-nudge used to speak up here;
+    when it went, this went with it, so it moved to where the compiling
+    happens. Which folder a note belongs in is the user's call, so this only
+    names the gap and never creates the note.
+    """
+    try:
+        con = sqlite3.connect(f"file:{MEM_DB}?mode=ro", uri=True, timeout=5)
+        rows = con.execute(
+            "SELECT project, COUNT(*) FROM observations "
+            "WHERE superseded_at IS NULL AND compressed_into IS NULL "
+            "GROUP BY project HAVING COUNT(*) >= ?", (minimum,)).fetchall()
+        con.close()
+    except Exception as exc:
+        log(f"  ! mem-lite okunamadı: {exc}")
+        return []
+    # An unresolved placeholder is the note template's key, not a real repo --
+    # the same guard iter_notes applies, for the same reason.
+    return [(p, n) for p, n in sorted(rows)
+            if p and p not in owned and "{{" not in p]
 
 
 def observations(project, since):
@@ -794,6 +825,11 @@ def main():
         if outcome not in ("dry-run", "error") and refresh_sources(
                 path, project, args, vault_root):
             tally["sources-linked"] = tally.get("sources-linked", 0) + 1
+
+    if args.all:
+        for project, count in unowned_projects({n[2] for n in notes}):
+            log(f"  ? {project}: {count} kayıt var, bunu sahiplenen not yok — "
+                "`mem_lite_project:` taşıyan bir not aç")
 
     log("— özet: " + ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
     return 0 if not tally.get("error") and not tally.get("invalid") else 2
