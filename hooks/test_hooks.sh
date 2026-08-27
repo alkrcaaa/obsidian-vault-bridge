@@ -330,6 +330,67 @@ mirror '{"llmContent":[{"text":"Skipped as a duplicate"}]}' >/dev/null
 if [[ ! -e "$day_file" ]]; then pass "an unparsable response writes nothing"
 else fail "an unparsable response writes nothing" "$(cat "$day_file")"; fi
 
+# --- obsidian-mirror --reconcile: the capture path stopped mattering --------
+# The PostToolUse hook above only ever sees saves made through the mem_save
+# *tool*. mem-lite is equally reachable as `cli.mjs save`, which the agent
+# picks whenever the MCP tools sit behind a tool search -- that path fires no
+# PostToolUse, so three real saves landed in SQLite and the vault never heard
+# about them. The recovery diffs the two stores rather than learning a second
+# trigger, so a fourth capture path cannot break it the same way.
+RHOME="$(mktemp -d)"
+trap 'rm -rf "$VAULT" "$REPO" "$MIRROR" "$RHOME"' EXIT
+mkdir -p "$RHOME/.claude-mem-lite"
+python3 - "$RHOME/.claude-mem-lite/claude-mem-lite.db" "$PROJECT" <<'PY'
+import sqlite3, sys
+from datetime import datetime, timedelta, timezone
+db, project = sys.argv[1], sys.argv[2]
+con = sqlite3.connect(db)
+con.execute(
+    "CREATE TABLE observations (id INTEGER, project TEXT, created_at TEXT, "
+    "type TEXT, title TEXT, narrative TEXT, text TEXT, lesson_learned TEXT, "
+    "files_modified TEXT, superseded_at TEXT, compressed_into TEXT)")
+now = datetime.now(timezone.utc)
+rows = [
+    (777, project, now.isoformat(), "bugfix", "cli save", "n", "t", "l", '["a.py"]'),
+    (778, project, (now - timedelta(days=30)).isoformat(), "bugfix", "ancient",
+     "n", "t", "l", "[]"),
+]
+con.executemany("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL)", rows)
+con.commit()
+PY
+
+reconcile() { # cwd
+  echo '{"cwd":"'"$1"'"}' \
+    | MEM_OBSIDIAN_VAULT="$MIRROR" HOME="$RHOME" \
+      python3 "$HOOKS_DIR/obsidian-mirror.py" --reconcile 2>&1
+}
+
+rm -rf "${MIRROR:?}"/*
+reconcile "$REPO" >/dev/null
+check "a save the tool hook never saw is recovered" "#777" "$(cat "$day_file" 2>/dev/null)"
+
+# Re-running must be a no-op. The reconcile finds an entry by the `(#id)` the
+# writer stamps, so any drift between the two paths' formatting would make
+# every already-mirrored row look missing and duplicate the whole log on every
+# session end.
+reconcile "$REPO" >/dev/null
+count="$(grep -c '(#777)' "$day_file" 2>/dev/null || echo 0)"
+if [[ "$count" == "1" ]]; then pass "reconcile is idempotent"
+else fail "reconcile is idempotent" "#777 appears $count times"; fi
+
+# Old rows stay in mem-lite rather than being dumped into a vault whose
+# contract is what is true now.
+if ! grep -rq "ancient" "$MIRROR"; then pass "reconcile leaves history behind"
+else fail "reconcile leaves history behind" "$(grep -r ancient "$MIRROR")"; fi
+
+# Outside a repo the classification cannot be redone from a database row --
+# mem-lite keys those sessions by directory, and only a live cwd says which
+# ones fold into the catch-all -- so the pass has no set to diff and stays out.
+rm -rf "${MIRROR:?}"/*
+reconcile "$RHOME" >/dev/null
+if [[ -z "$(ls -A "$MIRROR")" ]]; then pass "reconcile stays out of the catch-all"
+else fail "reconcile stays out of the catch-all" "$(ls -R "$MIRROR")"; fi
+
 # --- concept-capture: an unsupervised writer that picks its own filename ----
 echo
 echo "concept-capture"

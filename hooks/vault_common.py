@@ -98,20 +98,39 @@ def infer_project(cwd):
     having been captured. One key for all of it gives that work a single note,
     and every existing lookup keeps working unchanged.
     """
-    root = cwd
-    in_repo = False
+    root, in_repo = _git_root(cwd)
+    return _dir_key(root) if in_repo else CATCHALL_PROJECT
+
+
+def mem_lite_key(cwd):
+    """mem-lite's own project key for a directory, repo or not.
+
+    infer_project() answers a different question -- which *vault* note owns
+    this session -- and folds every repo-less directory into the catch-all.
+    The reconcile pass needs the un-folded key as well, because that string is
+    what mem-lite actually wrote into the `project` column, and it is the only
+    way to find a session's rows again after the fact.
+    """
+    root, _ = _git_root(cwd)
+    return _dir_key(root)
+
+
+def _git_root(cwd):
+    """(repo root, True) if cwd is inside a git repo, else (cwd, False)."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             cwd=cwd, capture_output=True, text=True, timeout=3,
         )
         if result.returncode == 0 and result.stdout.strip():
-            root = result.stdout.strip()
-            in_repo = True
+            return result.stdout.strip(), True
     except Exception:
         pass
-    if not in_repo:
-        return CATCHALL_PROJECT
+    return cwd, False
+
+
+def _dir_key(root):
+    """`parent--base`, sanitised -- mem-lite's inferProject() naming."""
     root = root.rstrip("/")
     base = os.path.basename(root)
     parent = os.path.basename(os.path.dirname(root))

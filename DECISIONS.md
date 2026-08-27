@@ -260,3 +260,37 @@ for two bullets, and that is the only figure that recurs every session.
 write into the card. The section header states the promise that a machine line
 never reaches the injected card on its own; that promise is what makes running
 a small model broadly safe in the first place.
+
+---
+
+## D12. The mirror reconciles state instead of learning every capture path
+
+**Decision.** `obsidian-mirror.py` keeps its PostToolUse trigger, but the
+guarantee now comes from a second mode, `--reconcile`, wired on `Stop`: it
+diffs mem-lite against the vault for the session's project and writes whatever
+is missing. The capture path stopped mattering.
+
+**Because.** The PostToolUse hook fires on the `mem_save` *tool*. mem-lite is
+equally reachable as `cli.mjs save`, and the agent picks that whenever the
+`mem_*` MCP tools sit behind a tool search — one Bash call instead of two, which
+the project's own instructions recommend. Three real saves went that way on
+2026-08-27 (#441, #442, #443): all three landed in SQLite, none reached the
+vault, and nothing reported a failure, because from the hook's side no event
+had occurred. Teaching the hook to also recognise `cli.mjs save` would be a
+string match on a command line, and a fourth path — a plugin, an editor
+integration, a future CLI verb — would break it in exactly the same silence.
+Comparing the two stores has no such surface: present in one and absent in the
+other is the whole condition.
+
+The pass is scoped to the session's own project and to seven days. Scope,
+because the catch-all classification cannot be redone from a database row —
+mem-lite keys a repo-less session by whatever directory it started in, and only
+a live `cwd` says whether that should be folded in. Window, because mem-lite
+held 305 unmirrored rows at the time, nearly all of them predating the mirror;
+back-filling those would empty weeks of history into a vault whose contract is
+what is true now. Each project heals itself the next time it is opened.
+
+**Don't.** Give the reconcile a second way to identify an entry. It finds one
+by the `(#id)` stamp the writer emits, which is why both modes share
+`write_entry()` — a second spelling would make every mirrored row look missing
+and duplicate the entire log on every session end.
