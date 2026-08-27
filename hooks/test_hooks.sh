@@ -383,13 +383,28 @@ else fail "reconcile is idempotent" "#777 appears $count times"; fi
 if ! grep -rq "ancient" "$MIRROR"; then pass "reconcile leaves history behind"
 else fail "reconcile leaves history behind" "$(grep -r ancient "$MIRROR")"; fi
 
-# Outside a repo the classification cannot be redone from a database row --
-# mem-lite keys those sessions by directory, and only a live cwd says which
-# ones fold into the catch-all -- so the pass has no set to diff and stays out.
+# A repo-less session is filed under the catch-all in the vault while mem-lite
+# went on keying it by directory, so the folder and the rows have different
+# names. Skipping that case left one whole class of save with no recovery path
+# -- the consistency check found a stranded row the same day it shipped.
 rm -rf "${MIRROR:?}"/*
-reconcile "$RHOME" >/dev/null
-if [[ -z "$(ls -A "$MIRROR")" ]]; then pass "reconcile stays out of the catch-all"
-else fail "reconcile stays out of the catch-all" "$(ls -R "$MIRROR")"; fi
+CATCHDIR="$(mktemp -d)"; trap 'rm -rf "$VAULT" "$REPO" "$MIRROR" "$RHOME" "$CATCHDIR"' EXIT
+CATCHKEY="$(basename "$(dirname "$CATCHDIR")")--$(basename "$CATCHDIR")"
+CATCHKEY="${CATCHKEY//[^a-zA-Z0-9_.-]/-}"
+python3 - "$RHOME/.claude-mem-lite/claude-mem-lite.db" "$CATCHKEY" <<'PY'
+import sqlite3, sys
+from datetime import datetime, timezone
+con = sqlite3.connect(sys.argv[1])
+con.execute("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL)",
+            (779, sys.argv[2], datetime.now(timezone.utc).isoformat(), "decision",
+             "repo-less save", "n", "t", "l", "[]"))
+con.commit()
+PY
+reconcile "$CATCHDIR" >/dev/null
+check "a repo-less save is recovered under the catch-all" "#779" \
+  "$(cat "$MIRROR/genel/$(date +%Y-%m-%d).md" 2>/dev/null)"
+if [[ ! -d "$MIRROR/$CATCHKEY" ]]; then pass "and mem-lite's directory key gets no folder"
+else fail "and mem-lite's directory key gets no folder" "$(ls "$MIRROR")"; fi
 
 # --- concept-capture: an unsupervised writer that picks its own filename ----
 echo

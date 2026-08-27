@@ -149,23 +149,23 @@ def reconcile(data):
     should be folded into the catch-all. A row saved for some other repo is
     simply left for a session in that repo to pick up -- within RECONCILE_DAYS,
     every project heals itself the next time it is opened.
+
+    The two keys are looked up separately for that same reason. A repo-less
+    session is filed under the catch-all in the vault while mem-lite went on
+    keying it by directory, so the folder to diff and the rows to diff it
+    against have different names -- and a live `cwd` is exactly what supplies
+    both. Skipping the catch-all instead left one class of save with no
+    recovery path at all, which the consistency check found the same day.
     """
     vault = env_or_conf("MEM_OBSIDIAN_VAULT")
     if not vault:
         return "skip", "no-mirror-dir"
 
     cwd = data.get("cwd") or os.getcwd()
-    project = infer_project(cwd)
-    key = CATCHALL_PROJECT if project == CATCHALL_PROJECT else mem_lite_key(cwd)
+    project = infer_project(cwd)   # the vault folder
+    key = mem_lite_key(cwd)        # what mem-lite wrote in the project column
     since = (datetime.now(timezone.utc) - timedelta(days=RECONCILE_DAYS)) \
         .strftime("%Y-%m-%dT%H:%M:%S")
-
-    if key == CATCHALL_PROJECT:
-        # Repo-less sessions are scattered across mem-lite keys by directory,
-        # and the catch-all folder is the only record of which ones were folded
-        # in. Nothing outside this session can be attributed, so the reconcile
-        # has no set to diff against and stays out.
-        return "skip", "catchall"
 
     try:
         con = sqlite3.connect(f"file:{MEM_DB}?mode=ro", uri=True, timeout=5)
