@@ -401,8 +401,19 @@ con.execute("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL)",
 con.commit()
 PY
 reconcile "$CATCHDIR" >/dev/null
+catch_file="$MIRROR/genel/$(date +%Y-%m-%d).md"
 check "a repo-less save is recovered under the catch-all" "#779" \
-  "$(cat "$MIRROR/genel/$(date +%Y-%m-%d).md" 2>/dev/null)"
+  "$(cat "$catch_file" 2>/dev/null)"
+
+# The catch-all folder mixes every repo-less session, so without this the only
+# way to tell an MDM PoC from a bringup session driving a remote machine is to
+# read the body. A repo's folder name already carries that, which is why the
+# stamp is scoped to the catch-all.
+check "a catch-all entry names the directory it came from" \
+  "$(basename "$CATCHDIR")" "$(cat "$catch_file" 2>/dev/null)"
+check "and carries the full path" "Scope: " "$(cat "$catch_file" 2>/dev/null)"
+if ! grep -q "Scope:" "$day_file"; then pass "a repo entry gets no scope line"
+else fail "a repo entry gets no scope line" "$(cat "$day_file")"; fi
 if [[ ! -d "$MIRROR/$CATCHKEY" ]]; then pass "and mem-lite's directory key gets no folder"
 else fail "and mem-lite's directory key gets no folder" "$(ls "$MIRROR")"; fi
 

@@ -83,7 +83,32 @@ def _response_text(tool_response):
     return json.dumps(tool_response, default=str)
 
 
-def write_entry(vault, project, when, obs_id, obs_type, title, content, lesson, files):
+def scope_of(cwd):
+    """(short tag, ~-relative path) for the directory a save was made in.
+
+    Only the catch-all needs this. A repo's folder name already says where its
+    entries came from; the catch-all deliberately collects every repo-less
+    session into one folder, and a day file there can mix a self-hosted MDM
+    PoC with a bringup session driving a remote machine, with nothing above
+    the body text to tell them apart. Splitting the folder instead would undo
+    the reason it exists -- each shard falls under the note threshold, so none
+    is ever compiled and all of it goes unreachable.
+
+    The directory is the only locator this hook can state as fact. Which
+    remote host the work actually touched lives in the body, because the hook
+    runs locally and cannot know it; the model writing the save is what has
+    that, and does record it.
+    """
+    cwd = (cwd or "").rstrip("/")
+    if not cwd:
+        return "", ""
+    home = os.path.expanduser("~")
+    pretty = "~" + cwd[len(home):] if cwd.startswith(home) else cwd
+    return os.path.basename(cwd) or cwd, pretty
+
+
+def write_entry(vault, project, when, obs_id, obs_type, title, content, lesson,
+                files, scope=None):
     """Append one observation to `<vault>/<project>/<when:%Y-%m-%d>.md`.
 
     Both entry points land here so the two paths cannot drift into writing the
@@ -95,13 +120,18 @@ def write_entry(vault, project, when, obs_id, obs_type, title, content, lesson, 
     os.makedirs(day_dir, exist_ok=True)
     day_file = os.path.join(day_dir, f"{when.strftime('%Y-%m-%d')}.md")
 
-    lines = [f"### {when.strftime('%H:%M')} — [{obs_type}] {title} (#{obs_id})", ""]
+    tag, pretty = scope_of(scope) if scope else ("", "")
+    head = f"### {when.strftime('%H:%M')} — "
+    head += f"{tag} · " if tag else ""
+    lines = [f"{head}[{obs_type}] {title} (#{obs_id})", ""]
     if lesson:
         lines += [f"**Lesson:** {lesson}", ""]
     if content:
         lines += [content.strip(), ""]
     if files:
         lines += [f"Files: {', '.join(files)}", ""]
+    if pretty:
+        lines += [f"Scope: {pretty}", ""]
     lines += ["---", ""]
 
     is_new = not os.path.exists(day_file)
@@ -198,6 +228,10 @@ def reconcile(data):
             vault, project, when, obs_id, otype or "discovery",
             title or f"observation #{obs_id}", narrative or text or "",
             lesson or "", files if isinstance(files, list) else [],
+            # Safe to stamp this session's cwd: the rows were selected by
+            # mem-lite's key, which is derived from the directory, so a row
+            # under this key was saved from this directory.
+            scope=cwd if project == CATCHALL_PROJECT else None,
         )
         written += 1
 
@@ -258,7 +292,8 @@ def main():
         # what the repo's note carries. `cwd` comes off the payload rather
         # than os.getcwd() because a hook is spawned wherever the agent
         # happens to be, which is not always the session's directory.
-        if infer_project(data.get("cwd") or os.getcwd()) == CATCHALL_PROJECT:
+        cwd = data.get("cwd") or os.getcwd()
+        if infer_project(cwd) == CATCHALL_PROJECT:
             project = CATCHALL_PROJECT
 
         tool_input = data.get("tool_input") or {}
@@ -268,7 +303,8 @@ def main():
         files = tool_input.get("files") or []
 
         now = datetime.now(timezone.utc).astimezone()
-        write_entry(vault, project, now, obs_id, obs_type, title, content, lesson, files)
+        write_entry(vault, project, now, obs_id, obs_type, title, content,
+                    lesson, files, scope=cwd if project == CATCHALL_PROJECT else None)
     except Exception:
         record_metric("obsidian-mirror", "skip", os.getcwd(), "write-error")
         sys.exit(0)

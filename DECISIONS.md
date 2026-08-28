@@ -294,3 +294,31 @@ what is true now. Each project heals itself the next time it is opened.
 by the `(#id)` stamp the writer emits, which is why both modes share
 `write_entry()` — a second spelling would make every mirrored row look missing
 and duplicate the entire log on every session end.
+
+---
+
+## D13. The catch-all stays one folder and carries its scope per entry
+
+**Decision.** A catch-all entry is stamped with the directory the save was made
+in: a short tag in the heading (`11:20 — fos-deploy · [decision] …`) and the
+`~`-relative path on a `Scope:` line. Repo folders get neither.
+
+**Because.** The catch-all collects every repo-less session by design, so one
+day file can hold a self-hosted MDM PoC and a bringup session driving a remote
+machine with nothing above the body text to separate them. That is not a
+cosmetic problem: `_mem-log/genel/` compiles into a single note whose card is
+injected at the start of every repo-less session, and that card was measured at
+100% MDM content — a session about anything else was being handed five bullets
+about a tablet fleet.
+
+Naming the folders instead is the obvious fix and the wrong one: it is the
+per-directory sharding that D-catch-all removed, where each shard falls under
+the note threshold, none is ever compiled, and all of it goes unreachable.
+A repo's folder name already answers "where did this come from"; only the
+catch-all is missing the answer, so only the catch-all pays for it.
+
+**Don't.** Try to record which remote host the work touched. This hook runs
+locally and cannot know it. The model writing the save does, and does record
+it — the entry that prompted this names the host, its IP, and the three
+diverging compose files it found there, all in the body. The directory is the
+only locator the hook can state as fact, so it is the only one it states.
