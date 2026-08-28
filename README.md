@@ -65,13 +65,15 @@ live in [DECISIONS.md](DECISIONS.md). Read it before changing a hook's contract.
   untrusted: path separators are refused, existing titles are offered back so it
   reuses one, and a note carrying `mem_lite_project:` or `agent_profile: true`
   is never written to. Opt-in via `VAULT_DIR` + `QWEN_BASE_URL`.
-- `tools/vault-lint.py` — not a hook, run manually or on a cron. The three checks
+- `tools/vault-lint.py` — not a hook, run manually or on a cron. The checks
   CLAUDE.md Section 5 / Vault Standards.md's "Haftalık Bakım" already name, as a
   script instead of an ad hoc read: stale `compiled: false` raw notes, broken
-  `[[wikilink]]`s (resolved against notes and attachments alike), and
+  `[[wikilink]]`s (resolved against notes and attachments alike),
   "sınıfsız/başlıksız" notes (root-level strays, `07- Raw` notes missing required
-  frontmatter, `08- Wiki` notes with no heading). Read-only, always — it reports,
-  it never edits or deletes. See D16 in `DECISIONS.md`.
+  frontmatter, `08- Wiki` notes with no heading), and `<!-- auto:DATE -->` lines
+  from personal-capture/concept-capture sitting unpromoted past a review window
+  (CLAUDE.md's OKM policy, Section 2c). Read-only, always — it reports, it never
+  edits or deletes. See D16 in `DECISIONS.md`.
 - `hooks/vault_common.py` — the project-key, note lookup, and locked-append
   helper all three write-side hooks share. A key resolved differently in one
   hook than the other fails silently (the note is simply never found), so it

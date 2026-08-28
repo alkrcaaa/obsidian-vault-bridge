@@ -913,12 +913,18 @@ cat >"$LVAULT/Stray.md" <<'EOF'
 root-level, no folder
 EOF
 
+cat >"$LVAULT/AutoNote.md" <<EOF
+- old fact <!-- auto:2020-01-01 -->
+- fresh fact <!-- auto:$(date +%Y-%m-%d) -->
+EOF
+
 out="$(vl "
 notes = list(m._walk_notes('$LVAULT'))
 all_files = list(m._walk_all_files('$LVAULT'))
 print('stale:', m.stale_raw_notes('$LVAULT', notes, 14))
 print('broken:', m.broken_backlinks('$LVAULT', notes, all_files))
 print('unclassified:', m.unclassified_notes('$LVAULT', notes))
+print('stale_auto:', m.stale_auto_captures('$LVAULT', notes, 45))
 ")"
 
 check "a compiled:false note past the window is stale" "07- Raw/Old.md" "$out"
@@ -931,6 +937,8 @@ check_absent "the folder's own index note is exempt from the raw contract" \
 check "a wiki note with no heading is unclassified" "08- Wiki/NoHeading.md" "$out"
 check_absent "a wiki note with a heading is not" "HasHeading" "$out"
 check "a root-level file is a stray note" "'Stray.md'" "$out"
+check "an old auto-capture past the window is reported" "old fact" "$out"
+check_absent "a fresh auto-capture within the window is not" "fresh fact" "$out"
 
 # --- the catch-all: the work that belongs to no repo ------------------------
 # mem-lite names a repo-less session after whatever directory it started in,

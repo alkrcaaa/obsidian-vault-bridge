@@ -20,6 +20,11 @@ What it checks, straight out of those two files:
     başlıksız": a file sitting directly in the vault root (the standards doc
     says the root is inbox-only), a `07- Raw` note missing one of its
     required frontmatter fields, or a `08- Wiki` note with no `# ` heading.
+  * stale auto-captures -- CLAUDE.md Section 2c (OKM): a `<!-- auto:DATE -->`
+    line from personal-capture/concept-capture that has sat unpromoted past
+    a review window (default 45 days). Not a defect either -- just a line
+    nobody has yet decided is durable enough to promote or wrong enough to
+    delete, surfaced so that decision actually gets made.
 
 Read-only, always. CLAUDE.md Section 5 is explicit: "Bulguları rapor olarak
 sun, otomatik silme/toplu değişiklik yapma" -- this reports, it never edits
@@ -63,6 +68,10 @@ TEMPLATES_DIR = "04- Templates"
 # a source of outgoing links to check either.
 MEM_LOG_DIR = "_mem-log"
 STALE_DAYS_DEFAULT = 14
+# personal-capture and concept-capture review their own section for dedup
+# only, not for age -- CLAUDE.md Section 2c gives this the same window for
+# "review it" that stale_raw_notes gives a source for "read it".
+AUTO_STALE_DAYS_DEFAULT = 45
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 FENCE_RE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
@@ -71,6 +80,8 @@ FENCE_RE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 # code spans, not fences. Stripped separately so a doc's own meta-example
 # does not get flagged as a broken link to a note called "wikilink".
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+# Both hooks stamp a bullet the same way: `- <fact/line> <!-- auto:YYYY-MM-DD -->`.
+AUTO_STAMP_RE = re.compile(r"^(.*?)<!-- auto:(\d{4}-\d{2}-\d{2}) -->\s*$", re.MULTILINE)
 
 
 def _walk_notes(vault):
@@ -198,6 +209,23 @@ def unclassified_notes(vault, notes):
     return sorted(out)
 
 
+def stale_auto_captures(vault, notes, stale_days):
+    """`<!-- auto:DATE -->` lines sitting unpromoted past the review window."""
+    cutoff = datetime.now(timezone.utc).timestamp() - stale_days * 86400
+    out = []
+    for path in notes:
+        for m in AUTO_STAMP_RE.finditer(_read(path)):
+            try:
+                when = datetime.strptime(m.group(2), "%Y-%m-%d") \
+                    .replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                continue
+            if when < cutoff:
+                line = m.group(1).strip().lstrip("-").strip()
+                out.append((_rel(vault, path), line[:80], m.group(2)))
+    return sorted(out)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -205,6 +233,9 @@ def main():
     ap.add_argument("--stale-days", type=int, default=STALE_DAYS_DEFAULT,
                      help=f"Staleness window for compiled:false raw notes "
                           f"(default: {STALE_DAYS_DEFAULT})")
+    ap.add_argument("--auto-stale-days", type=int, default=AUTO_STALE_DAYS_DEFAULT,
+                     help=f"Review window for unpromoted auto-captured lines "
+                          f"(default: {AUTO_STALE_DAYS_DEFAULT})")
     args = ap.parse_args()
 
     vault = os.path.abspath(args.vault or resolve_vault() or "")
@@ -218,6 +249,7 @@ def main():
     stale = stale_raw_notes(vault, notes, args.stale_days)
     broken = broken_backlinks(vault, notes, all_files)
     unclassified = unclassified_notes(vault, notes)
+    stale_auto = stale_auto_captures(vault, notes, args.auto_stale_days)
 
     print(f"vault-lint — {len(notes)} note(s) scanned\n")
 
@@ -234,8 +266,13 @@ def main():
     print(f"unclassified / stray notes — {len(unclassified)}")
     for rel, why in unclassified:
         print(f"  {rel} — {why}")
+    print()
 
-    return 1 if (stale or broken or unclassified) else 0
+    print(f"stale auto-captures (>{args.auto_stale_days}d, unpromoted) — {len(stale_auto)}")
+    for rel, line, when in stale_auto:
+        print(f"  {rel} [{when}]: {line}")
+
+    return 1 if (stale or broken or unclassified or stale_auto) else 0
 
 
 if __name__ == "__main__":

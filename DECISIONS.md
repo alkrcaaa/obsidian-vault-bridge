@@ -419,3 +419,16 @@ exempt from the raw-source frontmatter contract — it is a MOC, not a source.
 **Why link resolution checks attachments, not just notes.** `[[Foo.png]]`
 resolves the same way a note link does — by basename, against anything in the
 vault. Checking only `.md` files made every image embed a false positive.
+
+**The fourth check, added same day: stale auto-captures.** personal-capture
+and concept-capture already stamp every line `<!-- auto:DATE -->`, but the
+stamp was only ever read for dedup, never for age — nothing asked whether an
+unpromoted line was still true. `stale_auto_captures()` reports any stamped
+line sitting in its `Otomatik Yakalananlar` section past a 45-day window
+(longer than the 14-day raw-note window: an auto-capture is already a
+probably-true fact pending a promote/delete decision, not an unread source).
+This is CLAUDE.md's own OKM policy (vault Section 2c) made checkable: every
+piece of vault knowledge is timeless (hand-written prose, never expires),
+dated (an auto-capture — needs a decision eventually), or a pointer
+(`_mem-log`, never itself evaluated). The check finds the second class going
+unreviewed; it never deletes, same contract as the other three.
