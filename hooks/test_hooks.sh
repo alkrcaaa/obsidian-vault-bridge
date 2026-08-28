@@ -952,6 +952,63 @@ check "and gets its own card heading" "genel | ## Genel Özet" "$out"
 check_absent "nor is it called a depo in its system prompt" "genel | ## Genel Özet | Sen bir bilgi tabanı derleyicisisin. Bir yazılım deposu" "$out"
 rm -rf "$CREPO" "$CPLAIN" "$CMIRROR" "$CVAULT" "$(dirname "$CDB")"
 
+# --- source classification: two consumers, one corpus -----------------------
+# The vault is ~88% coding telemetry by volume. A general or voice assistant
+# reading the same corpus retrieves an ENC gRPC port number when it was asked
+# who the user is, so the audience split has to be assertable. The sensitivity
+# half is the D#10 debt: which material needs a pass before anything leaves the
+# machine. Both are lookups, so the only thing that can rot is the defaults --
+# an unlisted source that reads as "not sensitive" is the failure.
+echo
+echo "source classification"
+
+cls() { python3 -c "
+import sys; sys.path.insert(0, '$HOOKS_DIR')
+import vault_common as v
+$1
+"; }
+
+out="$(cls "
+for k in ('workspace--dev-agent-kit', 'workspace--miivii_setup_ansible',
+          'workspace--never-seen-before', None):
+    print('%s -> %s' % (k, v.classify_project(k)))
+")"
+check "a listed personal repo is personal" \
+  "workspace--dev-agent-kit -> ('coding', 'personal')" "$out"
+check "a work repo is work" \
+  "workspace--miivii_setup_ansible -> ('coding', 'work')" "$out"
+# The whole point of inverting the list: forgetting to classify a new repo must
+# cost an unnecessary review, never a missed one.
+check "an unlisted repo defaults to sensitive" \
+  "workspace--never-seen-before -> ('coding', 'work')" "$out"
+check "and so does no key at all" "None -> ('coding', 'work')" "$out"
+check "the catch-all admits it is mixed" "('coding', 'mixed')" \
+  "$(cls "print(v.classify_project(v.CATCHALL_PROJECT))")"
+
+out="$(cls "
+for p in ('00- Home/01-Personal/Personal Space/Hakkimda.md',
+          '02- Kuartis/02- Vuran/x.md',
+          '08- Wiki/Fine-tuning.md',
+          '_mem-log/workspace--dev-agent-kit/2026-08-25.md',
+          '99- Unlisted/x.md'):
+    print('%s | %s | life=%s' % (p, v.classify_vault_path(p), v.is_life_material(p)))
+")"
+check "the profile folder is what a general assistant may read" \
+  "Hakkimda.md | ('life', 'personal') | life=True" "$out"
+check "a work-repo note is not" "x.md | ('coding', 'work') | life=False" "$out"
+check "a wiki concept serves both" "Fine-tuning.md | ('both', 'personal') | life=True" "$out"
+check "the raw mem log is coding material" \
+  "2026-08-25.md | ('coding', 'mixed') | life=False" "$out"
+check "an unlisted folder defaults to sensitive coding material" \
+  "99- Unlisted/x.md | ('coding', 'work') | life=False" "$out"
+
+# Keyed on the first segment, so classifying a folder and classifying a note
+# inside it can never disagree.
+if [[ "$(cls "print(v.classify_vault_path('08- Wiki'))")" == \
+      "$(cls "print(v.classify_vault_path('08- Wiki/anything.md'))")" ]]; then
+  pass "a folder and a note inside it classify the same"
+else fail "a folder and a note inside it classify the same" "segment split drifted"; fi
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

@@ -322,3 +322,50 @@ locally and cannot know it. The model writing the save does, and does record
 it — the entry that prompted this names the host, its IP, and the three
 diverging compose files it found there, all in the body. The directory is the
 only locator the hook can state as fact, so it is the only one it states.
+
+---
+
+## D14. Sources are classified by lookup, on two axes, not by a per-record flag
+
+**Decision.** `vault_common.classify_project()` and `classify_vault_path()`
+answer `(audience, sensitivity)` for any source in the corpus, derived from the
+mem-lite project key and the vault's top-level folder. Nothing is written per
+record. Personal is the closed set and everything else is work; an unlisted
+source gets `("coding", "work")`.
+
+**Because.** Two different questions were being asked of one corpus and neither
+had an answer on disk.
+
+*Audience.* Measured on the live vault: 324KB of work-repo notes, 133KB of
+`_mem-log` lessons, 54KB of project docs — against 71KB of life material, of
+which the load-bearing part is one 229-line profile note. ~88% of this corpus is
+coding telemetry. That is exactly what a coding agent should retrieve and
+exactly what a general or voice assistant must not: asked who the user is, it
+would surface that the ENC gRPC port is 50053. The same measurement says what
+such an assistant is missing and a scope map cannot supply — there is no event
+stream. `01-Daily Notes` holds one note. Identity is covered; "what happened
+today, what do I owe whom" is not captured anywhere, and that is a collection
+gap, not a classification gap.
+
+*Sensitivity.* The vault is private today and may be opened later (D#10). The
+cost of carrying the split now is one line per repo; the cost of reconstructing
+it later is a human pass over 175 notes and 359 observations.
+
+**Why a lookup and not a column.** A per-record flag means a model classifying
+every save. It mislabels silently — a wrong label here is only discovered on the
+day it matters — and it answers for nothing already written, so 359 existing
+rows would need a retrofit pass by the same unreliable classifier. The project
+key and the folder are facts already on disk, they cannot drift, and they
+classify the whole backlog the moment the map exists.
+
+**Why personal is the closed set.** New repos are overwhelmingly work. Listing
+personal instead means a repo nobody remembered to classify still reads as
+sensitive; the cost of that mistake is an unnecessary review. Inverted, the cost
+is a missed one. Only one of those is recoverable.
+
+**Don't.** Read this as a leak control. It classifies provenance, not content: a
+personal repo's session that spent its time inside a work repo still lands under
+the personal key, and the secret scan that prompted this found a credential in a
+machine-written `_mem-log` day file — which this map labels `mixed` and does not
+redact. Content-level leakage needs a scan on the opening-up day. A map that is
+mistaken for one has made things worse than no map at all.
