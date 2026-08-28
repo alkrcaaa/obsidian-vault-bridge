@@ -369,3 +369,53 @@ the personal key, and the secret scan that prompted this found a credential in a
 machine-written `_mem-log` day file — which this map labels `mixed` and does not
 redact. Content-level leakage needs a scan on the opening-up day. A map that is
 mistaken for one has made things worse than no map at all.
+
+## D15. Vault note writes are locked, and the lock covers read-decide-write
+
+**Decision.** `vault_common.locked_note()` opens a note `a+` under
+`fcntl.flock(LOCK_EX)` and hands the caller that handle already positioned at
+the start. personal-capture, concept-capture and obsidian-mirror's `write_entry`
+all append through it now, and the lock spans their whole read-decide-write, not
+just the final `open(path, "a")`.
+
+**Because.** Three hooks append to a handful of shared notes from Stop/PostToolUse,
+which two hosts (Claude, Qwen) or two overlapping sessions can fire at the same
+moment, and nothing serialized that. An unlocked pair of concurrent appends can
+interleave mid-write and corrupt the note, not just duplicate a line.
+
+**Why the whole section, not just the write.** Locking only the final append
+still races on the decision before it: two readers can each read the note before
+either has written, both decide the same fact or line is new, and both append it.
+The lock has to be acquired before the read that the write depends on.
+
+**Proof, not a claim.** A single-process unit test cannot exercise a multi-process
+race. `test_hooks.sh` spawns 8 real concurrent processes writing through
+`locked_note()` and asserts both that no line was lost and that no line
+interleaved with another's (a malformed line, not a missing one, is what
+corruption looks like under `flock`).
+
+## D16. vault-lint is a script, not a rule the agent re-derives per session
+
+**Decision.** `tools/vault-lint.py` runs the three checks CLAUDE.md Section 5
+and Vault Standards.md's "Haftalık Bakım" already name — stale `compiled: false`
+raw notes, broken `[[wikilink]]`s, and "sınıfsız/başlıksız" notes (root-level
+strays, `07- Raw` notes missing required frontmatter, `08- Wiki` notes with no
+heading) — as a standalone, read-only script. It never edits or deletes; that
+stays a human decision, same contract as the two auto-capture hooks' own
+sections.
+
+**Because.** Those three checks were previously "an agent reads the vault by
+hand when asked." That means the check only happens when someone remembers to
+ask, and its cost grows with the vault every time it does run. A script costs
+the same on week 40 as on week 4.
+
+**What it deliberately excludes as a link source.** `04- Templates` (its
+wikilinks are literal placeholder text, e.g. `[[...]]`) and `_mem-log` (raw
+session mirror text, "elle düzenlenmez" — a session discussing wikilink syntax
+in prose logs as a literal `[[link]]` with nothing to curate it out). A folder's
+own index note (name matches its parent folder, e.g. `07- Raw/07- Raw.md`) is
+exempt from the raw-source frontmatter contract — it is a MOC, not a source.
+
+**Why link resolution checks attachments, not just notes.** `[[Foo.png]]`
+resolves the same way a note link does — by basename, against anything in the
+vault. Checking only `.md` files made every image embed a false positive.

@@ -65,9 +65,19 @@ live in [DECISIONS.md](DECISIONS.md). Read it before changing a hook's contract.
   untrusted: path separators are refused, existing titles are offered back so it
   reuses one, and a note carrying `mem_lite_project:` or `agent_profile: true`
   is never written to. Opt-in via `VAULT_DIR` + `QWEN_BASE_URL`.
-- `hooks/vault_common.py` — the project-key and note lookup both hooks share. A key
-  resolved differently in one hook than the other fails silently (the note is simply
-  never found), so it exists once.
+- `tools/vault-lint.py` — not a hook, run manually or on a cron. The three checks
+  CLAUDE.md Section 5 / Vault Standards.md's "Haftalık Bakım" already name, as a
+  script instead of an ad hoc read: stale `compiled: false` raw notes, broken
+  `[[wikilink]]`s (resolved against notes and attachments alike), and
+  "sınıfsız/başlıksız" notes (root-level strays, `07- Raw` notes missing required
+  frontmatter, `08- Wiki` notes with no heading). Read-only, always — it reports,
+  it never edits or deletes. See D16 in `DECISIONS.md`.
+- `hooks/vault_common.py` — the project-key, note lookup, and locked-append
+  helper all three write-side hooks share. A key resolved differently in one
+  hook than the other fails silently (the note is simply never found), so it
+  exists once; the same is true of `locked_note()`, which every append point
+  goes through so two hosts (or two overlapping sessions) writing the same
+  note at once cannot interleave and corrupt it (D15).
 - `mcp-infra/vault-search/` — FastMCP server, keyword + backlink search over an
   Obsidian vault (`vault_search`, `vault_read`, `vault_list`). Ranks curated notes
   above the raw mirror logs below, and `vault_read` takes a search hit's path back

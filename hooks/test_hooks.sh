@@ -848,6 +848,90 @@ else
 fi
 rm -rf "$ITMP"
 
+# --- vault-lint: CLAUDE.md Section 5 / Vault Standards.md's "Haftalık Bakım"
+# as a script instead of an ad hoc read -- stale raw notes, broken backlinks,
+# and the notes Vault Standards.md calls "sınıfsız veya başlıksız".
+echo
+echo "vault-lint"
+
+vl() { python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('vl', '$TOOLS_DIR/vault-lint.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+$1
+"; }
+
+LVAULT="$VAULT/lintvault"
+mkdir -p "$LVAULT/07- Raw" "$LVAULT/08- Wiki"
+
+cat >"$LVAULT/07- Raw/07- Raw.md" <<'EOF'
+# 07- Raw
+EOF
+
+cat >"$LVAULT/07- Raw/Old.md" <<'EOF'
+---
+source_type: article
+source_url: https://example.com
+captured: 2020-01-01
+compiled: false
+---
+old, unread
+EOF
+
+cat >"$LVAULT/07- Raw/New.md" <<'EOF'
+---
+source_type: article
+source_url: https://example.com
+captured: 2026-08-28
+compiled: false
+---
+just captured
+EOF
+
+cat >"$LVAULT/07- Raw/Bare.md" <<'EOF'
+no frontmatter at all
+EOF
+
+cat >"$LVAULT/08- Wiki/HasHeading.md" <<'EOF'
+# A Concept
+body
+EOF
+
+cat >"$LVAULT/08- Wiki/NoHeading.md" <<'EOF'
+just a paragraph, no heading
+EOF
+
+cat >"$LVAULT/Target.md" <<'EOF'
+# Target
+EOF
+
+cat >"$LVAULT/Linker.md" <<'EOF'
+Points at [[Target]] and at [[Nowhere]].
+EOF
+
+cat >"$LVAULT/Stray.md" <<'EOF'
+root-level, no folder
+EOF
+
+out="$(vl "
+notes = list(m._walk_notes('$LVAULT'))
+all_files = list(m._walk_all_files('$LVAULT'))
+print('stale:', m.stale_raw_notes('$LVAULT', notes, 14))
+print('broken:', m.broken_backlinks('$LVAULT', notes, all_files))
+print('unclassified:', m.unclassified_notes('$LVAULT', notes))
+")"
+
+check "a compiled:false note past the window is stale" "07- Raw/Old.md" "$out"
+check_absent "a compiled:false note within the window is not" "07- Raw/New.md" "$out"
+check "an unresolved wikilink is broken" "Nowhere" "$out"
+check_absent "a wikilink to a real note is not" "('Linker.md', 'Target')" "$out"
+check "a note with no frontmatter at all is unclassified" "07- Raw/Bare.md" "$out"
+check_absent "the folder's own index note is exempt from the raw contract" \
+  "07- Raw/07- Raw.md" "$out"
+check "a wiki note with no heading is unclassified" "08- Wiki/NoHeading.md" "$out"
+check_absent "a wiki note with a heading is not" "HasHeading" "$out"
+check "a root-level file is a stray note" "'Stray.md'" "$out"
+
 # --- the catch-all: the work that belongs to no repo ------------------------
 # mem-lite names a repo-less session after whatever directory it started in,
 # so `/home/ali`, `~/Downloads` and a scratch dir each became their own key.
