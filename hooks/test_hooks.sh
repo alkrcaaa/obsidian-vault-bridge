@@ -1010,5 +1010,48 @@ if [[ "$(cls "print(v.classify_vault_path('08- Wiki'))")" == \
 else fail "a folder and a note inside it classify the same" "segment split drifted"; fi
 
 echo
+echo "concurrent writers"
+
+# personal-capture, concept-capture and obsidian-mirror all append to the
+# same handful of notes from Stop/PostToolUse hooks that two hosts (Claude,
+# Qwen) or two overlapping sessions can fire at once. Without a lock, two
+# processes racing an `open(path, "a")` can interleave their writes and
+# corrupt the note rather than merely duplicate a line -- that is the failure
+# locked_note() exists to close, and the only way to know it still does is a
+# real multi-process race, not a single-process unit test.
+LOCKFILE="$(mktemp -u)"
+WRITERS=8
+LINES_EACH=50
+for i in $(seq 1 $WRITERS); do
+  python3 -c "
+import sys; sys.path.insert(0, '$HOOKS_DIR')
+from vault_common import locked_note
+with locked_note('$LOCKFILE') as f:
+    for n in range($LINES_EACH):
+        f.write('writer-$i-line-%d\n' % n)
+" &
+done
+wait
+
+got_lines="$(wc -l < "$LOCKFILE" | tr -d ' ')"
+want_lines=$((WRITERS * LINES_EACH))
+if [[ "$got_lines" == "$want_lines" ]]; then
+  pass "concurrent locked_note writers keep every line"
+else
+  fail "concurrent locked_note writers keep every line" "expected $want_lines lines, got $got_lines"
+fi
+
+# Corruption reads as a line that is neither empty nor one of the exact
+# lines a writer wrote -- flock guarantees each writer's block lands whole,
+# so an interleaved write would produce a malformed line, not a missing one.
+bad_lines="$(grep -cvE '^writer-[0-9]+-line-[0-9]+$' "$LOCKFILE" || true)"
+if [[ "${bad_lines:-0}" == "0" ]]; then
+  pass "no writer's lines interleave with another's"
+else
+  fail "no writer's lines interleave with another's" "$bad_lines malformed line(s)"
+fi
+rm -f "$LOCKFILE"
+
+echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

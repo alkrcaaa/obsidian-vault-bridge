@@ -13,6 +13,7 @@ Nothing here writes. Every function is fail-open: on any missing piece it
 returns None/empty rather than raising, because a knowledge layer is an
 enhancement and must never be able to block a session.
 """
+import contextlib
 import os
 import re
 import subprocess
@@ -136,6 +137,40 @@ def _dir_key(root):
     parent = os.path.basename(os.path.dirname(root))
     raw = f"{parent}--{base}" if parent and parent not in (".", "/") else base
     return re.sub(r"[^a-zA-Z0-9_.-]", "-", raw)[:100]
+
+
+@contextlib.contextmanager
+def locked_note(path):
+    """Open a vault note for read-decide-append under an exclusive lock.
+
+    Three hooks (personal-capture, concept-capture, obsidian-mirror) append to
+    a handful of notes from Stop/PostToolUse, which two hosts (Claude, Qwen)
+    or two overlapping sessions can fire at the same moment. Locking only the
+    final `open(path, "a")` still races on the decision before it: two
+    readers can both read the note before either has appended, both decide
+    the same line is new, and both write it. So the lock has to wrap
+    read-decide-write as one section, not just the write -- this yields an
+    `a+` handle already positioned at the start, exclusively locked for the
+    caller's whole read-then-append.
+
+    `fcntl` is POSIX-only; where it is unavailable this silently skips the
+    lock rather than raising; a note write is a fail-open enhancement, not a
+    contract.
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    f = open(path, "a+", encoding="utf-8")
+    try:
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        f.seek(0)
+        yield f
+    finally:
+        f.close()
 
 
 def find_note(vault_dir, marker, read_bytes=1000, prefer=None):

@@ -75,7 +75,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from vault_common import (
         CATCHALL_PROJECT, env_or_conf, frontmatter_field, infer_project,
-        is_new_line, read_text, record_metric, vault_dir as resolve_vault,
+        is_new_line, locked_note, record_metric, vault_dir as resolve_vault,
     )
 except Exception:
     sys.exit(0)
@@ -375,23 +375,30 @@ def note_path(wiki, topic):
 
 
 def _append(path, topic, lines):
-    """Add what is new to the note's own dated section. Returns lines written."""
-    text = read_text(path, limit=400000) if os.path.exists(path) else ""
-    if text:
-        # Defence in depth: those two fields mark the notes the other two
-        # write paths own -- a repo note (injected into every session of that
-        # repo) and the profile note. A name collision must never let this
-        # hook write into one of them.
-        if (frontmatter_field(text, "mem_lite_project")
-                or frontmatter_field(text, "agent_profile")):
-            return 0
-    fresh = [ln for ln in lines if is_new_line(ln, text.splitlines())]
-    if not fresh:
-        return 0
+    """Add what is new to the note's own dated section. Returns lines written.
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    body = "\n".join(f"- {ln} <!-- auto:{today} -->" for ln in fresh) + "\n"
-    with open(path, "a", encoding="utf-8") as f:
+    Read-decide-write happens inside one locked_note section: this hook
+    picks its own filename from a model, so two overlapping sessions (or
+    Claude and Qwen both firing Stop) landing on the same topic would
+    otherwise both read the note before either wrote, both decide the same
+    line is new, and both append it.
+    """
+    with locked_note(path) as f:
+        text = f.read()
+        if text:
+            # Defence in depth: those two fields mark the notes the other two
+            # write paths own -- a repo note (injected into every session of
+            # that repo) and the profile note. A name collision must never
+            # let this hook write into one of them.
+            if (frontmatter_field(text, "mem_lite_project")
+                    or frontmatter_field(text, "agent_profile")):
+                return 0
+        fresh = [ln for ln in lines if is_new_line(ln, text.splitlines())]
+        if not fresh:
+            return 0
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        body = "\n".join(f"- {ln} <!-- auto:{today} -->" for ln in fresh) + "\n"
         if not text:
             f.write(
                 "---\n"
@@ -412,7 +419,7 @@ def _append(path, topic, lines):
                 "Yanlış bir satırı silmek yeterli.\n\n"
             )
         f.write(body)
-    return len(fresh)
+        return len(fresh)
 
 
 def _progress_path(session_id):

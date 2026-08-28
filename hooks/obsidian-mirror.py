@@ -43,8 +43,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from vault_common import (
-        CATCHALL_PROJECT, env_or_conf, infer_project, mem_lite_key,
-        record_metric,
+        CATCHALL_PROJECT, env_or_conf, infer_project, locked_note,
+        mem_lite_key, record_metric,
     )
 except Exception:
     sys.exit(0)
@@ -115,9 +115,13 @@ def write_entry(vault, project, when, obs_id, obs_type, title, content, lesson,
     same record two different ways -- the reconcile pass finds an entry by the
     `(#id)` this function stamps, so a second spelling of it would make every
     already-mirrored row look missing and duplicate the lot.
+
+    Locked: the PostToolUse path and the reconcile pass can both write the
+    same day file in the same second (a mem_save fired right as a stale
+    session's Stop hook reconciles), and an unlocked pair of appends can
+    interleave mid-write and corrupt the file, not just duplicate a line.
     """
     day_dir = os.path.join(vault, project)
-    os.makedirs(day_dir, exist_ok=True)
     day_file = os.path.join(day_dir, f"{when.strftime('%Y-%m-%d')}.md")
 
     tag, pretty = scope_of(scope) if scope else ("", "")
@@ -134,8 +138,9 @@ def write_entry(vault, project, when, obs_id, obs_type, title, content, lesson,
         lines += [f"Scope: {pretty}", ""]
     lines += ["---", ""]
 
-    is_new = not os.path.exists(day_file)
-    with open(day_file, "a", encoding="utf-8") as f:
+    with locked_note(day_file) as f:
+        f.seek(0, os.SEEK_END)
+        is_new = f.tell() == 0
         if is_new:
             f.write(f"# {project} — {when.strftime('%Y-%m-%d')}\n\n")
         f.write("\n".join(lines) + "\n")

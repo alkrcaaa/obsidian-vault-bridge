@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from vault_common import (
-        env_or_conf, find_note, read_text, record_metric,
+        env_or_conf, find_note, locked_note, record_metric,
         # Shared with concept-capture: both append to a note they will append
         # to again next session, so "does the note already say this" has to be
         # answered the same way in both or one of them starts duplicating.
@@ -203,7 +203,6 @@ def _ask_model(base_url, messages):
 
 
 def _append(note_path, facts):
-    text = read_text(note_path, limit=400000)
     # "Where may I write" and "what does the note already say" are two
     # different questions, and one slice used to answer both. Writes append at
     # the end of the note, always below the injected card -- the card is
@@ -213,26 +212,32 @@ def _append(note_path, facts):
     # invites a human to promote a captured line up into the card, and a window
     # starting below it made exactly the facts the user endorsed come back
     # every single session.
-    fresh = [f for f in facts if _is_new(f, text.splitlines())]
-    if not fresh:
-        return 0
+    #
+    # The read (what does the note say) and the write (append what is new)
+    # happen inside one locked_note section: concept-capture and a second
+    # instance of this same hook (Claude and Qwen can both fire Stop on
+    # overlapping sessions) append to the same profile note, and locking only
+    # the final write would still let two readers both decide the same fact
+    # is new before either has written it.
+    with locked_note(note_path) as f:
+        text = f.read()
+        fresh = [fact for fact in facts if _is_new(fact, text.splitlines())]
+        if not fresh:
+            return 0
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    lines = [f"- {f} <!-- auto:{today} -->" for f in fresh]
-    if AUTO_SECTION in text:
-        addition = "\n".join(lines) + "\n"
-        with open(note_path, "a", encoding="utf-8") as f:
-            f.write(addition)
-    else:
-        header = (
-            f"\n\n{AUTO_SECTION}\n"
-            "Oturum sonunda otomatik çıkarılan gerçekler (lokal model). Elle\n"
-            "düzenlenebilir; yanlış bir satırı silmek yeterli. Buradaki hiçbir\n"
-            "satır kendiliğinden yukarıdaki ajan kartına girmez.\n\n"
-        )
-        with open(note_path, "a", encoding="utf-8") as f:
+        today = datetime.now().strftime("%Y-%m-%d")
+        lines = [f"- {fact} <!-- auto:{today} -->" for fact in fresh]
+        if AUTO_SECTION in text:
+            f.write("\n".join(lines) + "\n")
+        else:
+            header = (
+                f"\n\n{AUTO_SECTION}\n"
+                "Oturum sonunda otomatik çıkarılan gerçekler (lokal model). Elle\n"
+                "düzenlenebilir; yanlış bir satırı silmek yeterli. Buradaki hiçbir\n"
+                "satır kendiliğinden yukarıdaki ajan kartına girmez.\n\n"
+            )
             f.write(header + "\n".join(lines) + "\n")
-    return len(fresh)
+        return len(fresh)
 
 
 def _progress_path(session_id):
