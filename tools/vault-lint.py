@@ -210,10 +210,21 @@ def unclassified_notes(vault, notes):
 
 
 def stale_auto_captures(vault, notes, stale_days):
-    """`<!-- auto:DATE -->` lines sitting unpromoted past the review window."""
+    """`<!-- auto:DATE -->` lines sitting unpromoted past the review window.
+
+    Same exclusions as broken_backlinks() and for the same reason: _mem-log
+    is raw session prose that can discuss this exact stamp format in words
+    (a session explaining the OKM policy logs its own explanation, stamp
+    syntax and all), and 04- Templates carries the syntax as literal
+    placeholder text. Neither is a real captured fact to review.
+    """
+    templates_root = os.path.join(vault, TEMPLATES_DIR)
+    mem_log_root = os.path.join(vault, MEM_LOG_DIR)
     cutoff = datetime.now(timezone.utc).timestamp() - stale_days * 86400
     out = []
     for path in notes:
+        if path.startswith(templates_root + os.sep) or path.startswith(mem_log_root + os.sep):
+            continue
         for m in AUTO_STAMP_RE.finditer(_read(path)):
             try:
                 when = datetime.strptime(m.group(2), "%Y-%m-%d") \

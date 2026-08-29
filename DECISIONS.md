@@ -432,3 +432,13 @@ piece of vault knowledge is timeless (hand-written prose, never expires),
 dated (an auto-capture — needs a decision eventually), or a pointer
 (`_mem-log`, never itself evaluated). The check finds the second class going
 unreviewed; it never deletes, same contract as the other three.
+
+**Caught in cross-review (2026-08-29):** the fourth check shipped without the
+`04- Templates` / `_mem-log` exclusion the first three already had. A session
+that explains the `<!-- auto:DATE -->` stamp format in prose (this decision
+entry is itself an example) gets mirrored into `_mem-log` verbatim, stamp
+syntax included — and a real date in that sentence would eventually cross the
+45-day window and get reported as an unpromoted capture that was never a
+capture at all. Same exclusion as `broken_backlinks()`, added to
+`stale_auto_captures()` too, with a test that plants exactly this sentence in
+a synthetic `_mem-log` file and asserts it never surfaces.

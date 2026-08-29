@@ -918,6 +918,11 @@ cat >"$LVAULT/AutoNote.md" <<EOF
 - fresh fact <!-- auto:$(date +%Y-%m-%d) -->
 EOF
 
+mkdir -p "$LVAULT/_mem-log/workspace--repo"
+cat >"$LVAULT/_mem-log/workspace--repo/2020-01-01.md" <<'EOF'
+A session explaining the stamp format logs its own example: <!-- auto:2020-01-01 -->
+EOF
+
 out="$(vl "
 notes = list(m._walk_notes('$LVAULT'))
 all_files = list(m._walk_all_files('$LVAULT'))
@@ -939,6 +944,8 @@ check_absent "a wiki note with a heading is not" "HasHeading" "$out"
 check "a root-level file is a stray note" "'Stray.md'" "$out"
 check "an old auto-capture past the window is reported" "old fact" "$out"
 check_absent "a fresh auto-capture within the window is not" "fresh fact" "$out"
+check_absent "_mem-log's own auto-stamp syntax is not a stale capture" \
+  "stamp format" "$out"
 
 # --- the catch-all: the work that belongs to no repo ------------------------
 # mem-lite names a repo-less session after whatever directory it started in,
