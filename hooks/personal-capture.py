@@ -125,8 +125,11 @@ def _record_text(rec):
     is what the first live Qwen run actually did.
     """
     message = rec.get("message") or {}
-    content = message.get("content")
+    content = message.get("content") or rec.get("content")
     if isinstance(content, str):
+        m = re.search(r"<USER_REQUEST>(.*?)</USER_REQUEST>", content, re.DOTALL)
+        if m:
+            return m.group(1).strip()
         return content
     blocks = content if isinstance(content, list) else message.get("parts")
     if not isinstance(blocks, list):
@@ -154,7 +157,11 @@ def _user_messages(path):
                     rec = json.loads(line)
                 except Exception:
                     continue
-                if rec.get("type") != "user":
+                is_user = (
+                    rec.get("type") in ("user", "USER_INPUT")
+                    or rec.get("source") == "USER_EXPLICIT"
+                )
+                if not is_user:
                     continue
                 content = _record_text(rec)
                 if not isinstance(content, str):
@@ -171,9 +178,26 @@ def _user_messages(path):
     return out
 
 
+def _get_model(base_url, env_var, default="/models/qwen3.6-27b"):
+    configured = os.environ.get(env_var)
+    if configured:
+        return configured
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/models")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.load(resp)
+            models = data.get("data", [])
+            if models and "id" in models[0]:
+                return models[0]["id"]
+    except Exception:
+        pass
+    return default
+
+
 def _ask_model(base_url, messages):
+    model = _get_model(base_url, "PERSONAL_CAPTURE_MODEL")
     body = json.dumps({
-        "model": os.environ.get("PERSONAL_CAPTURE_MODEL", "/models/qwen3.8-27b"),
+        "model": model,
         "messages": [{"role": "user", "content": PROMPT.format(messages=messages)}],
         "temperature": 0.2,
         "max_tokens": 1200,
@@ -292,8 +316,13 @@ def _worker(transcript, note_path, base_url):
         joined = joined[-MAX_PROMPT_CHARS:]
     try:
         facts = _ask_model(base_url, joined)
-    except Exception:
-        return quiet("model-error")
+    except Exception as e:
+        # Bare "model-error" looked identical whether the vLLM box was down
+        # for two days or a single request glitched -- the model streak from
+        # 2026-09-03 was invisible until someone read the source. The type
+        # name plus a clipped message is enough to tell "connection refused"
+        # from "bad JSON" without leaking prompt content into the metric log.
+        return quiet(f"model-error:{type(e).__name__}:{str(e)[:150]}")
     if not facts:
         return quiet("no-facts")
     try:
@@ -321,7 +350,7 @@ def main():
     except Exception:
         sys.exit(0)
 
-    transcript = data.get("transcript_path") or ""
+    transcript = data.get("transcript_path") or data.get("transcriptPath") or ""
     if not transcript or not os.path.isfile(transcript):
         # Configured but handed nothing to read: a host that does not pass a
         # transcript on Stop switches this hook off without ever saying so.
@@ -336,7 +365,8 @@ def main():
     # Every Stop is a candidate now, and the marker holds progress instead of a
     # flag: dispatch again once the user has typed another MIN_CHARS worth,
     # which is the same floor the worker needs before it can say anything.
-    progress = _progress_path(data.get("session_id"))
+    session_id = data.get("session_id") or data.get("conversationId") or ""
+    progress = _progress_path(session_id)
     seen = _progress(progress)
     typed = sum(len(m) for m in _user_messages(transcript))
     if typed - seen < MIN_CHARS:

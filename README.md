@@ -65,6 +65,27 @@ live in [DECISIONS.md](DECISIONS.md). Read it before changing a hook's contract.
   untrusted: path separators are refused, existing titles are offered back so it
   reuses one, and a note carrying `mem_lite_project:` or `agent_profile: true`
   is never written to. Opt-in via `VAULT_DIR` + `QWEN_BASE_URL`.
+- `hooks/project-narrative.py` — Stop hook, the write half for *what a session
+  actually did*. mem-lite's `content` field already holds long-form prose per
+  save and `obsidian-mirror.py --reconcile` already mirrors it verbatim, but
+  nothing produced a session-level version of that prose on its own — a repo
+  fact only got captured if the agent remembered to write a rich enough
+  `mem_save` before the user closed the laptop. This reads BOTH sides of the
+  transcript (unlike `personal-capture`, "what did we do" lives in what the
+  assistant said it did) and asks the local model to **compile**, not
+  synthesize, what was already said: focus, what was done and why, how the
+  ask changed during the session, and any next steps already stated — same
+  ceiling-avoidance as `concept-capture` (D#6/#416 in mem-lite: a 27B doing
+  interpretation on a technical transcript is its most expensive place to be
+  wrong). Fires once a session has said enough to be worth a narrative and
+  re-fires as more accumulates, leaving the latest snapshot as the day file's
+  last "Oturum Özeti" entry. Written through the mem-lite CLI (`save --type
+  change`), not a vault note directly, so it costs zero changes on the mirror
+  side and is searchable via `mem_recent`/`mem_search` like anything else.
+  `vault-inject.py` reads the freshest such entry (within 2 days) as a third
+  injected slice, separate from the compiled note's cumulative digest — "catch
+  me up on yesterday" needs the paragraphs vault-compile deliberately
+  discards, not the one-line bullets it keeps. Opt-in via `QWEN_BASE_URL`.
 - `tools/vault-lint.py` — not a hook, run manually or on a cron. The checks
   CLAUDE.md Section 5 / Vault Standards.md's "Haftalık Bakım" already name, as a
   script instead of an ad hoc read: stale `compiled: false` raw notes, broken
@@ -116,10 +137,11 @@ read from `~/.config/dev-agent-kit/vault.env` (`KEY=value` per line), written by
   mirror writes, the other is what gets searched/read back. When it resolves to
   nothing, `vault-inject` records a `skip`/`no-vault-dir` metric once per session
   so `hook-stats.sh` can tell "off" apart from "broken".
-- `QWEN_BASE_URL` — OpenAI-compatible endpoint for `personal-capture.py` and
-  `concept-capture.py`, e.g. a local vLLM at `http://host:8002/v1`. Unset means
-  both hooks are off. `PERSONAL_CAPTURE_MODEL` overrides the model id;
-  `CONCEPT_CAPTURE_MODEL` overrides it for concept capture alone.
+- `QWEN_BASE_URL` — OpenAI-compatible endpoint for `personal-capture.py`,
+  `concept-capture.py`, and `project-narrative.py`, e.g. a local vLLM at
+  `http://host:8002/v1`. Unset means all three hooks are off.
+  `PERSONAL_CAPTURE_MODEL` / `CONCEPT_CAPTURE_MODEL` / `PROJECT_NARRATIVE_MODEL`
+  override the model id per hook.
 - `VAULT_WIKI_DIR` — folder `concept-capture.py` files concept notes in,
   relative to `VAULT_DIR` (or absolute). Defaults to `08- Wiki`. It is the only
   place that hook may write, so a folder that does not exist switches it off

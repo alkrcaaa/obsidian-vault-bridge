@@ -225,6 +225,67 @@ else
   fail "trimming happens at a line boundary" "$kept lines kept, only $truncated intact"
 fi
 
+# --- vault-inject: the session-narrative slice ------------------------------
+# project-narrative.py's day-file entries, not the compiled note -- the
+# compiled note is vault-compile's cumulative digest and deliberately loses
+# the paragraph texture this slice exists to carry forward.
+vi() { python3 -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('vi', '$HOOKS_DIR/vault-inject.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+$1
+"; }
+
+SESSPROJ="workspace--sesstest"
+SESSMIRROR="$(mktemp -d)"
+mkdir -p "$SESSMIRROR/$SESSPROJ"
+TODAY="$(date +%Y-%m-%d)"
+cat >"$SESSMIRROR/$SESSPROJ/$TODAY.md" <<EOF
+# $SESSPROJ — $TODAY
+
+### 09:00 — [bugfix] unrelated entry (#1)
+
+**Lesson:** something else entirely.
+
+---
+
+### 14:32 — [change] Oturum Özeti (#2)
+
+**Lesson:** first snapshot of the session.
+
+---
+
+### 18:47 — [change] Oturum Özeti (#3)
+
+**Lesson:** updated, freshest snapshot.
+
+---
+EOF
+
+out="$(MEM_OBSIDIAN_VAULT="$SESSMIRROR" vi "print(m._session_slice('$SESSPROJ'))")"
+check "picks the latest Oturum Özeti, not the first" "freshest snapshot" "$out"
+check_absent "does not surface an unrelated same-day entry's title alone" "unrelated entry" "$out"
+
+YESTERYEAR="$(date -d '5 days ago' +%Y-%m-%d 2>/dev/null || date -v-5d +%Y-%m-%d)"
+mkdir -p "$SESSMIRROR/${SESSPROJ}-stale"
+cat >"$SESSMIRROR/${SESSPROJ}-stale/$YESTERYEAR.md" <<EOF
+# ${SESSPROJ}-stale — $YESTERYEAR
+
+### 09:00 — [change] Oturum Özeti (#9)
+
+**Lesson:** too old to catch anyone up on anything.
+
+---
+EOF
+out="$(MEM_OBSIDIAN_VAULT="$SESSMIRROR" vi "print(m._session_slice('${SESSPROJ}-stale'))")"
+if [[ "$out" == "None" ]]; then pass "a day file older than the staleness window injects nothing"
+else fail "a day file older than the staleness window injects nothing" "$out"; fi
+
+out="$(MEM_OBSIDIAN_VAULT="$SESSMIRROR" vi "print(m._session_slice('workspace--never-touched'))")"
+if [[ "$out" == "None" ]]; then pass "a project with no day file injects nothing"
+else fail "a project with no day file injects nothing" "$out"; fi
+rm -rf "$SESSMIRROR"
+
 echo
 echo "personal-capture"
 
@@ -293,6 +354,40 @@ else fail "the injected card is left untouched" "$card_lines_before -> $card_lin
 # the machine's real endpoint and this test would quietly ship a transcript to
 # it instead of asserting the gate.
 out="$(echo '{"transcript_path":"'"$TRANSCRIPT"'","session_id":"t1"}' | VAULT_DIR="$VAULT" QWEN_BASE_URL="" HOME="$(mktemp -d)" python3 "$HOOKS_DIR/personal-capture.py" 2>&1)"
+if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
+else fail "no model endpoint is a silent no-op" "$out"; fi
+
+echo
+echo "project-narrative"
+
+# Opposite of personal-capture on purpose: "what did we do" lives in what the
+# assistant said it did, so both sides of the conversation must survive here,
+# not just the user's.
+pn() { python3 -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('pn', '$HOOKS_DIR/project-narrative.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+$1
+"; }
+
+PN_TRANSCRIPT="$VAULT/pn-transcript.jsonl"
+cat >"$PN_TRANSCRIPT" <<'EOF'
+{"type":"user","message":{"role":"user","content":"personal-capture model-error veriyor, düzeltip kapsamı genişletelim"}}
+{"type":"assistant","message":{"role":"assistant","content":"except bloğunu düzelttim, gerçek hatayı logluyoruz"}}
+{"type":"user","message":{"role":"user","content":"<system-reminder>machine noise</system-reminder>"}}
+{"type":"user","message":{"role":"user","content":"benim şifrem hunter2"}}
+EOF
+
+out="$(pn "print(m._session_messages('$PN_TRANSCRIPT'))")"
+check "keeps the user's words" "model-error veriyor" "$out"
+check "keeps the assistant's words too" "except bloğunu düzelttim" "$out"
+check_absent "drops hook/system records" "machine noise" "$out"
+check_absent "credentials never leave the machine" "hunter2" "$out"
+
+# HOME is redirected: without it the config-file fallback would supply the
+# machine's real endpoint and this would quietly dispatch a real save.
+out="$(echo '{"transcript_path":"'"$PN_TRANSCRIPT"'","session_id":"pn1"}' \
+  | QWEN_BASE_URL="" HOME="$(mktemp -d)" python3 "$HOOKS_DIR/project-narrative.py" 2>&1)"
 if [[ -z "$out" ]]; then pass "no model endpoint is a silent no-op"
 else fail "no model endpoint is a silent no-op" "$out"; fi
 

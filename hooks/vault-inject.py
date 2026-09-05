@@ -37,13 +37,15 @@ note, unreadable file -> exit 0 in silence.
 """
 import json
 import os
+import re
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from vault_common import (
-        agent_card, find_note, first_section, frontmatter_field,
+        agent_card, env_or_conf, find_note, first_section, frontmatter_field,
         infer_project, read_text, record_metric, vault_dir as resolve_vault,
     )
 except Exception:
@@ -51,6 +53,9 @@ except Exception:
 
 REPO_CARD_CHARS = 1400
 PROFILE_CARD_CHARS = 1100
+SESSION_CARD_CHARS = 1600
+SESSION_STALE_DAYS = 2  # "catch me up on yesterday", not on last month
+DAY_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")
 
 
 def _cap(text, limit):
@@ -98,7 +103,15 @@ def _repo_slice(vault_dir, project):
         return None
     rel = os.path.relpath(note_path, vault_dir)
     compiled = frontmatter_field(text, "last_compiled")
-    stamp = f", compiled {compiled}" if compiled else ""
+    stamp = ""
+    if compiled:
+        stamp = f", compiled {compiled}"
+        try:
+            c_date = datetime.strptime(compiled, "%Y-%m-%d")
+            if (datetime.now() - c_date).days > 14:
+                stamp += " [stale: >14d, verify recent changes via git log or mem-lite]"
+        except Exception:
+            pass
     return (
         f"[vault] Compiled note for this repo -- {rel}{stamp}. "
         f"Use it instead of rediscovering the codebase; vault_read(\"{rel}\") "
@@ -120,6 +133,45 @@ def _profile_slice(vault_dir):
     )
 
 
+def _session_slice(project):
+    """The latest "Oturum Özeti" entry from this project's own mirrored day
+    file (project-narrative.py's Stop hook, mirrored in verbatim by
+    obsidian-mirror.py --reconcile) -- not the compiled note, which
+    vault-compile.py deliberately reduces to one-line cumulative bullets.
+    "Catch me up on yesterday" needs the paragraphs, not the digest.
+    """
+    mirror_dir = env_or_conf("MEM_OBSIDIAN_VAULT")
+    if not mirror_dir:
+        return None
+    day_dir = os.path.join(mirror_dir, project)
+    if not os.path.isdir(day_dir):
+        return None
+    days = sorted(m.group(1) for m in
+                  (DAY_FILE_RE.match(n) for n in os.listdir(day_dir)) if m)
+    if not days:
+        return None
+    latest = days[-1]
+    try:
+        if (datetime.now() - datetime.strptime(latest, "%Y-%m-%d")).days > SESSION_STALE_DAYS:
+            return None
+    except ValueError:
+        return None
+    text = read_text(os.path.join(day_dir, f"{latest}.md"))
+    if not text:
+        return None
+    entries = [b for b in re.split(r"\n---\n", text) if "Oturum Özeti" in b]
+    if not entries:
+        return None
+    block = entries[-1].strip()  # last fire of the day == most complete snapshot
+    if not _has_content(block):
+        return None
+    return (
+        f"[vault] Son oturum özeti ({project}, {latest}) -- bir önceki oturumda "
+        f"ne yapıldığını ve neden özetler; devam ederken buna göre kısa bir "
+        f"öneri sun.\n{_cap(block, SESSION_CARD_CHARS)}"
+    )
+
+
 def main():
     vault_dir = resolve_vault()
     if not vault_dir:
@@ -134,13 +186,22 @@ def main():
     except Exception:
         data = {}
 
-    cwd = data.get("cwd") or os.getcwd()
+    is_antigravity = os.environ.get("DAK_AGENT") == "antigravity" or "invocationNum" in data
+    # Antigravity PreInvocation fires before every model turn. Only inject on first invocation.
+    if is_antigravity and data.get("invocationNum", 1) > 1:
+        sys.exit(0)
+
+    cwd = data.get("cwd") or (data.get("workspacePaths", [None])[0]) or os.getcwd()
 
     parts = []
     try:
-        repo = _repo_slice(vault_dir, infer_project(cwd))
+        project = infer_project(cwd)
+        repo = _repo_slice(vault_dir, project)
         if repo:
             parts.append(repo)
+        session = _session_slice(project)
+        if session:
+            parts.append(session)
         profile = _profile_slice(vault_dir)
         if profile:
             parts.append(profile)
@@ -156,12 +217,21 @@ def main():
 
     record_metric("vault-inject", "inject", cwd, f"{len(parts)}card")
 
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": "\n\n".join(parts),
-        },
-    }))
+    if is_antigravity:
+        print(json.dumps({
+            "injectSteps": [
+                {
+                    "ephemeralMessage": "\n\n".join(parts),
+                }
+            ]
+        }))
+    else:
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": "\n\n".join(parts),
+            },
+        }))
     sys.exit(0)
 
 
