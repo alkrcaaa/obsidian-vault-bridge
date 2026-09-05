@@ -196,7 +196,7 @@ def reconcile(data):
     if not vault:
         return "skip", "no-mirror-dir"
 
-    cwd = data.get("cwd") or os.getcwd()
+    cwd = data.get("cwd") or (data.get("workspacePaths", [None])[0]) or os.getcwd()
     project = infer_project(cwd)   # the vault folder
     key = mem_lite_key(cwd)        # what mem-lite wrote in the project column
     since = (datetime.now(timezone.utc) - timedelta(days=RECONCILE_DAYS)) \
@@ -251,21 +251,23 @@ def main():
     except Exception:
         sys.exit(0)
 
+    cwd = data.get("cwd") or (data.get("workspacePaths", [None])[0]) or os.getcwd()
     if "--reconcile" in sys.argv[1:]:
         try:
             action, detail = reconcile(data)
         except Exception:
             action, detail = "skip", "reconcile-error"
-        record_metric("obsidian-mirror", action, data.get("cwd") or os.getcwd(), detail)
+        record_metric("obsidian-mirror", action, cwd, detail)
         sys.exit(0)
 
     # Match on the tool, not on one host's spelling of it. Qwen wires this
-    # PostToolUse on `mcp__mem-lite__.*` and an exact-name compare is the shape
-    # of bug that made personal-capture dispatch every session and find
-    # nothing. Every other mem-lite tool still falls through here untouched,
-    # which is why nothing is recorded before this line -- a metric here would
-    # fire on every search and recall.
-    if not str(data.get("tool_name") or "").endswith("mem_save"):
+    # PostToolUse on `mcp__mem-lite__.*` and Antigravity calls `call_mcp_tool`.
+    t_name = data.get("tool_name") or data.get("toolCall", {}).get("name") or ""
+    t_args = data.get("tool_input") or data.get("toolCall", {}).get("args") or {}
+    is_mem_save = str(t_name).endswith("mem_save") or (
+        t_name == "call_mcp_tool" and t_args.get("ToolName") == "mem_save"
+    )
+    if not is_mem_save:
         sys.exit(0)
 
     # Env first, then the installer's config file. Reading only the env meant
@@ -278,7 +280,8 @@ def main():
         sys.exit(0)
 
     try:
-        text = _response_text(data.get("tool_response"))
+        tool_resp = data.get("tool_response") or data.get("toolResult") or data.get("toolResponse")
+        text = _response_text(tool_resp)
         m = SAVE_RE.search(text)
         if not m:
             # A dedup skip, an error, or a response shape this regex does not
@@ -297,11 +300,12 @@ def main():
         # what the repo's note carries. `cwd` comes off the payload rather
         # than os.getcwd() because a hook is spawned wherever the agent
         # happens to be, which is not always the session's directory.
-        cwd = data.get("cwd") or os.getcwd()
         if infer_project(cwd) == CATCHALL_PROJECT:
             project = CATCHALL_PROJECT
 
-        tool_input = data.get("tool_input") or {}
+        tool_input = t_args if (t_name == "call_mcp_tool" and "Arguments" in t_args) else (data.get("tool_input") or t_args)
+        if t_name == "call_mcp_tool" and isinstance(t_args.get("Arguments"), dict):
+            tool_input = t_args["Arguments"]
         title = tool_input.get("title") or f"observation #{obs_id}"
         content = tool_input.get("content") or ""
         lesson = tool_input.get("lesson_learned") or ""

@@ -210,23 +210,22 @@ AÇIKLAMALAR:
 JSON:"""
 
 
-def _blocks(message):
-    """Text blocks of one record, across both hosts' transcript shapes.
+def _blocks(rec):
+    """Text blocks of one record, across all hosts' transcript shapes.
 
     Claude writes `message.content` (a string, or typed blocks); Qwen writes
-    `message.parts` (untyped objects carrying `text`). A hook that reads only
-    Claude's shape dispatches on Qwen every session and always finds
-    nothing -- which is what the Qwen side of personal-capture actually did
-    until it was taught both.
+    `message.parts` (untyped objects carrying `text`). Antigravity writes
+    `content` (string) and `tool_calls` (list).
     """
+    message = rec.get("message") if isinstance(rec.get("message"), dict) else rec
+    used_tool = bool(rec.get("tool_calls"))
     content = message.get("content")
     if isinstance(content, str):
-        return [content], False
+        return [content], used_tool
     blocks = content if isinstance(content, list) else message.get("parts")
     if not isinstance(blocks, list):
-        return [], False
+        return [], used_tool
     texts = []
-    used_tool = False
     for b in blocks:
         if not isinstance(b, dict):
             continue
@@ -252,9 +251,13 @@ def _explanations(path):
                     rec = json.loads(line)
                 except Exception:
                     continue
-                if rec.get("type") != "assistant":
+                is_assistant = (
+                    rec.get("type") in ("assistant", "PLANNER_RESPONSE")
+                    or rec.get("source") == "MODEL"
+                )
+                if not is_assistant:
                     continue
-                texts, used_tool = _blocks(rec.get("message") or {})
+                texts, used_tool = _blocks(rec)
                 if used_tool or not texts:
                     continue
                 text = FENCE.sub("", "\n".join(texts)).strip()
@@ -294,12 +297,28 @@ def _titles(wiki):
     return [n for n in names if n != os.path.basename(wiki)][:60]
 
 
+def _get_model(base_url, env_vars, default="/models/qwen3.6-27b"):
+    for ev in env_vars:
+        configured = os.environ.get(ev)
+        if configured:
+            return configured
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/models")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.load(resp)
+            models = data.get("data", [])
+            if models and "id" in models[0]:
+                return models[0]["id"]
+    except Exception:
+        pass
+    return default
+
+
 def _ask_model(base_url, explanations, titles):
     listed = "\n".join(f"- {t}" for t in titles) or "- (henüz not yok)"
+    model = _get_model(base_url, ("CONCEPT_CAPTURE_MODEL", "PERSONAL_CAPTURE_MODEL"))
     body = json.dumps({
-        "model": os.environ.get("CONCEPT_CAPTURE_MODEL",
-                                os.environ.get("PERSONAL_CAPTURE_MODEL",
-                                               "/models/qwen3.8-27b")),
+        "model": model,
         "messages": [{"role": "user", "content": PROMPT.format(
             titles=listed, max_lines=MAX_LINES, explanations=explanations)}],
         "temperature": 0.2,
@@ -506,7 +525,7 @@ def main():
     except Exception:
         sys.exit(0)
 
-    transcript = data.get("transcript_path") or ""
+    transcript = data.get("transcript_path") or data.get("transcriptPath") or ""
     if not transcript or not os.path.isfile(transcript):
         # Configured but handed nothing to read: a host that does not pass a
         # transcript on Stop switches this hook off without ever saying so.
@@ -519,7 +538,8 @@ def main():
     # The marker holds progress instead: dispatch again once another
     # MIN_CHARS of explanation has accumulated, the same floor the worker
     # needs before it can say anything.
-    progress = _progress_path(data.get("session_id"))
+    session_id = data.get("session_id") or data.get("conversationId") or ""
+    progress = _progress_path(session_id)
     seen = _progress(progress)
     total = sum(len(t) for t in _explanations(transcript))
     if total - seen < MIN_CHARS:

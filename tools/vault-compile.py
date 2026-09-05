@@ -844,6 +844,16 @@ def compile_note(path, project, args, vault_root):
             log((raw or "")[:1500])
         return "invalid"
 
+    # Synthesis Drift guard: prevent silent mass deletion of decisions (D10)
+    old_span = section_span(current, SECTIONS[0])
+    old_decisions_text = current[old_span[0]:old_span[1]] if old_span else ""
+    old_decisions_count = len([ln for ln in old_decisions_text.splitlines() if ln.strip().startswith("- ") and len(ln.strip()) > 3])
+    new_decisions_count = len(parsed["decisions"])
+    if old_decisions_count >= 5 and new_decisions_count < int(old_decisions_count * 0.6) and not args.force:
+        log(f"  ! {project}: synthesis drift engellendi! Karar sayısı {old_decisions_count} -> {new_decisions_count} düştü. Yazma iptal edildi (--force ile geçilebilir).")
+        record_metric("vault-compile", "drift-blocked", vault_root, f"{project}:{old_decisions_count}->{new_decisions_count}")
+        return "drift-blocked"
+
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     updated = apply_compiled(current, parsed, project, vault_root, day)
 
