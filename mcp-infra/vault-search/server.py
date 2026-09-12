@@ -41,6 +41,7 @@ SKIP_DIRS = {
     ".ruff_cache",
     ".code-review-graph",
     ".stfolder",
+    ".vault-compile-backups",
 }
 
 # Obsidian wikilink pattern: [[path|alias]] or [[path]]

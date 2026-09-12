@@ -133,7 +133,7 @@ def _session_messages(path):
                 except Exception:
                     continue
                 role = rec.get("type")
-                if role not in ("user", "assistant", "USER_INPUT"):
+                if role not in ("user", "assistant", "USER_INPUT", "PLANNER_RESPONSE"):
                     continue
                 content = _record_text(rec)
                 if not isinstance(content, str):

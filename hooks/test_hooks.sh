@@ -973,11 +973,11 @@ compiled: false
 old, unread
 EOF
 
-cat >"$LVAULT/07- Raw/New.md" <<'EOF'
+cat >"$LVAULT/07- Raw/New.md" <<EOF
 ---
 source_type: article
 source_url: https://example.com
-captured: 2026-08-28
+captured: $(date +%Y-%m-%d)
 compiled: false
 ---
 just captured
