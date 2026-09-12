@@ -62,6 +62,22 @@ MIN_CHARS = 200          # below this a session has not said anything about anyo
 MAX_PROMPT_CHARS = 12000  # newest messages only; a 27B degrades on a long tail
 TIMEOUT = 90
 MAX_FACTS = 3
+# is_new_line compares stems, so it only catches a restatement that reuses the
+# note's words. The 27B rewords the same observation every session: measured
+# 2026-09-12, 66 captured lines in 7 days, ~60% of them facts the card already
+# made or an earlier line said in other words (design taste alone 8 times).
+# Only something that reads meaning can reject those, so the model is shown
+# the profile it is adding to.
+MAX_KNOWN_CHARS = 20000
+# Backstop for when the model misjudges anyway: unreviewed lines are a queue
+# for a human (OKM, vault CLAUDE.md 2c), and a queue nobody drains must stop
+# growing instead of burying the few lines worth promoting.
+MAX_PENDING = 25
+# Below the shared 0.6: a profile fact is one short sentence restated with the
+# same few content words ("commit mesajları kısa" reworded shares 3 of 6
+# stems). Measured 2026-09-12 on the live profile: 0.5 kept 6/6 new facts and
+# blocked 3/4 rewordings, 0.6 blocked 2/4, 0.45 started dropping new facts.
+DEDUP_THRESHOLD = 0.5
 
 # Machine-generated user records: slash commands, hook injections, interrupt
 # notices. They are not the user talking, and they dominate by volume.
@@ -106,6 +122,13 @@ bir gerçek, kullanıcı hakkında 3. tekil şahısla yazılmış (ör.
 EN FAZLA 3 gerçek döndür — en kalıcı, en çok tekrar edeceklerini seç. Aynı
 şeyi farklı kelimelerle iki kez yazma. Emin değilsen az yaz.
 Hiç kalıcı gerçek yoksa boş dizi döndür: []
+
+PROFİLDE ZATEN YAZANLAR — bunları, ya da aynı anlama gelen bir cümleyi
+(farklı kelimelerle olsa bile) ASLA döndürme. Sadece burada olmayan yeni bir
+gerçek döndür:
+---
+{known}
+---
 
 MESAJLAR:
 ---
@@ -194,11 +217,52 @@ def _get_model(base_url, env_var, default="/models/qwen3.6-27b"):
     return default
 
 
-def _ask_model(base_url, messages):
+def _pending(text):
+    """Captured lines still waiting in the auto section for a human decision."""
+    _, _, section = text.partition(AUTO_SECTION)
+    return sum(1 for line in section.splitlines()
+               if line.startswith("- ") and "<!-- auto:" in line)
+
+
+def _logical_lines(text):
+    """The note's bullets and paragraphs, each rejoined into one line.
+
+    The profile's prose is hard-wrapped at ~80 columns, so one bullet spans
+    three or four physical lines and a restatement never shares 60% of its
+    stems with any single one of them: is_new_line waved through every
+    rewording of a wrapped fact, which was most of the profile.
+    """
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        continues = (out and stripped and line[:1].isspace()
+                     and not stripped.startswith(("- ", "#", "<!--")))
+        if continues:
+            out[-1] += " " + stripped
+        else:
+            out.append(stripped)
+    return out
+
+
+def _known(text):
+    """The profile as the model should see it: body only, tail clipped.
+
+    The card and the hand-written prose sit at the top and are what captured
+    lines most often restate, so a clip keeps the head.
+    """
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            text = text[end + 4:]
+    return text.strip()[:MAX_KNOWN_CHARS] or "(boş)"
+
+
+def _ask_model(base_url, messages, known="(boş)"):
     model = _get_model(base_url, "PERSONAL_CAPTURE_MODEL")
     body = json.dumps({
         "model": model,
-        "messages": [{"role": "user", "content": PROMPT.format(messages=messages)}],
+        "messages": [{"role": "user",
+                      "content": PROMPT.format(messages=messages, known=known)}],
         "temperature": 0.2,
         "max_tokens": 1200,
         # Qwen3 reasons before answering and the reasoning is billed against
@@ -245,7 +309,9 @@ def _append(note_path, facts):
     # is new before either has written it.
     with locked_note(note_path) as f:
         text = f.read()
-        fresh = [fact for fact in facts if _is_new(fact, text.splitlines())]
+        existing = _logical_lines(text)
+        fresh = [fact for fact in facts
+                 if _is_new(fact, existing, threshold=DEDUP_THRESHOLD)]
         if not fresh:
             return 0
 
@@ -315,7 +381,14 @@ def _worker(transcript, note_path, base_url):
     if len(joined) > MAX_PROMPT_CHARS:
         joined = joined[-MAX_PROMPT_CHARS:]
     try:
-        facts = _ask_model(base_url, joined)
+        with open(note_path, "r", encoding="utf-8", errors="ignore") as f:
+            note_text = f.read()
+    except OSError:
+        return quiet("read-error")
+    if _pending(note_text) >= MAX_PENDING:
+        return quiet("backlog-full")
+    try:
+        facts = _ask_model(base_url, joined, _known(note_text))
     except Exception as e:
         # Bare "model-error" looked identical whether the vLLM box was down
         # for two days or a single request glitched -- the model streak from

@@ -350,6 +350,20 @@ if [[ "$card_lines_before" == "$card_lines_after" ]]; then
   pass "the injected card is left untouched"
 else fail "the injected card is left untouched" "$card_lines_before -> $card_lines_after"; fi
 
+# Stem overlap cannot see a rewording, so the model is shown the profile and
+# the queue of unreviewed lines is capped.
+out="$(pc "print(m._known(open('$VAULT/profile.md').read()))")"
+check "the model is shown what the profile already says" "Ankara da yasiyor" "$out"
+check_absent "frontmatter is not part of what the model is shown" "agent_profile:" "$out"
+out="$(pc "
+body = '---\nagent_profile: true\n---\n' + m.AUTO_SECTION + '\n' + ''.join('- f%d <!-- auto:2026-09-12 -->\n' % i for i in range(m.MAX_PENDING))
+print(m._pending(body) >= m.MAX_PENDING, m._pending('- not captured\n'))")"
+check "a full review queue stops capture, uncaptured lines do not count" "True 0" "$out"
+out="$(pc "
+lines = m._logical_lines('- **Estetik:** koyu zinc tonlari, az renk;\n  turuncu yok, monokrom endustriyel.\n- Spor yapiyor.\n')
+print(len(lines), m._is_new('Turuncu yok, koyu zinc monokrom endustriyel estetik.', lines, threshold=m.DEDUP_THRESHOLD))")"
+check "a hard-wrapped bullet is compared as one line" "2 False" "$out"
+
 # HOME is redirected as well: without it the config-file fallback would supply
 # the machine's real endpoint and this test would quietly ship a transcript to
 # it instead of asserting the gate.
