@@ -73,7 +73,10 @@ STALE_DAYS_DEFAULT = 14
 # "review it" that stale_raw_notes gives a source for "read it".
 AUTO_STALE_DAYS_DEFAULT = 45
 
-WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
+# \ excluded from the target class: table cells escape the alias pipe as
+# \|, and without this a trailing backslash gets swallowed into the target
+# (e.g. "Kida/Kida\"), reporting a real, resolvable link as broken.
+WIKILINK_RE = re.compile(r"\[\[([^\]|#\\]+)")
 FENCE_RE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 # CLAUDE.md documents wikilink syntax by example -- "`[[wikilink]]` yalnızca
 # gerçek not adları için kullanılır" -- and those examples live inside inline

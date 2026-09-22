@@ -44,8 +44,13 @@ SKIP_DIRS = {
     ".vault-compile-backups",
 }
 
-# Obsidian wikilink pattern: [[path|alias]] or [[path]]
-WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^]]+)?\]\]")
+# Obsidian wikilink pattern: [[path|alias]] or [[path]]. Table cells need the
+# alias pipe escaped (\|) so it isn't read as a column separator; Obsidian
+# resolves that fine, but a naive [^\]|]+ target class swallows the backslash
+# into the captured path (e.g. "Kida/Kida\") and every such link silently
+# drops out of the backlink index. Exclude \\ from the target class and make
+# the escape optional before the alias separator so both forms resolve.
+WIKILINK_RE = re.compile(r"\[\[([^\]|\\]+?)(?:\\?\|[^]]+)?\]\]")
 
 # Max snippet length
 SNIPPET_MAX = 200
